@@ -6,6 +6,6 @@ if not exist .env (
   exit /b
 )
 python -m pip install -q -r requirements.txt
-start "" cmd /c "ping -n 6 127.0.0.1 >nul & start http://127.0.0.1:7860"
+start "" cmd /c "ping -n 11 127.0.0.1 >nul & start http://127.0.0.1:7860"
 python -m uvicorn backend.main:app --port 7860
 pause
