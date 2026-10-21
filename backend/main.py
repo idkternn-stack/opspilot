@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # baca GEMINI_API_KEY dari file .env, harus sebelum import agent
+
 import os, uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -18,7 +21,7 @@ def investigate(b: Inv):
     alert = next((a for a in tools.detect_alerts() if a["id"] == b.alert_id), None)
     if not alert: raise HTTPException(404, "Alert tidak ditemukan")
     try: res = agent.investigate(alert)
-    except KeyError: raise HTTPException(500, "GEMINI_API_KEY belum diatur")
+    except KeyError: raise HTTPException(500, "GEMINI_API_KEY belum diatur (isi file .env)")
     except Exception as e: raise HTTPException(500, f"Agent gagal: {e}")
     rid = uuid.uuid4().hex[:8]; RUNS[rid] = res
     return {"run_id": rid, "alert": alert, **res}
