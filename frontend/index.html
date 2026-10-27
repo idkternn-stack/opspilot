@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpsPilot</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14181f;--mute:#5d6673;--line:#dde1e7;--acc:#0b6e4f;--warn:#b4491f}
+@media (prefers-color-scheme:dark){:root{--bg:#10141a;--card:#181e27;--ink:#e8ebf0;--mute:#9aa4b2;--line:#2a3340;--acc:#3ecf9a;--warn:#f0956a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:26px;margin:0}h2{font-size:17px;margin:28px 0 10px}
+.sub{color:var(--mute);margin:4px 0 20px}.meta{color:var(--mute);font-size:13px;margin:-12px 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:10px 0}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+button{font:inherit;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:6px;padding:7px 14px;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.step{border-left:3px solid var(--line);padding:4px 0 4px 12px;margin:8px 0;white-space:pre-wrap}
+.step.tool{border-color:var(--acc)}.step b{color:var(--acc)}
+pre{white-space:pre-wrap;word-break:break-word;margin:4px 0 0;color:var(--mute);font-size:12.5px;max-height:180px;overflow:auto}
+.tag{color:var(--warn);font-weight:600}.sum{white-space:pre-wrap}
+</style>
+</head>
+<body>
+<main>
+  <h1>OpsPilot</h1>
+  <p class="sub">Agent yang menyelidiki anomali operasional, mencari akar masalah, dan mengusulkan tindakan. Setiap aksi menunggu persetujuanmu.</p>
+  <p class="meta" id="meta"></p>
+  <h2>Anomali terdeteksi</h2>
+  <div id="alerts"><p class="sub">Memuat…</p></div>
+  <div id="run"></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = t => String(t ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const js = o => esc(JSON.stringify(o, null, 1));
+const OFFLINE = 'Server OpsPilot tidak terhubung. Jalankan start.bat, lalu buka http://127.0.0.1:7860 (jangan buka file index.html langsung).';
+
+async function api(url, body) {
+  let r;
+  try {
+    r = await fetch(url, body && {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  } catch { throw new Error(OFFLINE); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || `Terjadi kesalahan (${r.status})`);
+  return d;
+}
+
+function lockButtons(locked) { document.querySelectorAll('#alerts button').forEach(b => b.disabled = locked); }
+
+async function load() {
+  api('/api/info').then(i => $('#meta').textContent = `Model: ${i.model}`).catch(() => {});
+  const list = await api('/api/alerts');
+  const box = $('#alerts');
+  box.innerHTML = list.length ? '' : '<p class="sub">Tidak ada anomali saat ini.</p>';
+  list.forEach(a => {
+    const card = document.createElement('div');
+    card.className = 'card row';
+    card.innerHTML = `<div><b>${esc(a.title)}</b><div class="sub" style="margin:0">${esc(a.type)}</div></div>`;
+    const btn = document.createElement('button');
+    btn.textContent = 'Investigasi';
+    btn.onclick = () => investigate(a, btn);
+    card.append(btn);
+    box.append(card);
+  });
+}
+
+async function investigate(alert, btn) {
+  lockButtons(true);
+  btn.textContent = 'Agent bekerja…';
+  $('#run').innerHTML = '<p class="sub">Agent merencanakan dan menjalankan investigasi. Biasanya butuh 10–60 detik.</p>';
+  try { render(await api('/api/investigate', {alert_id: alert.id})); }
+  catch (e) { $('#run').innerHTML = `<div class="card tag">${esc(e.message)}</div>`; }
+  lockButtons(false);
+  btn.textContent = 'Investigasi';
+}
+
+function render(r) {
+  let h = `<h2>Hasil investigasi</h2><div class="card sum">${esc(r.summary)}</div>`;
+  h += `<h2>Jejak langkah agent (${r.steps} langkah)</h2>`;
+  r.trace.forEach(t => {
+    h += t.type === 'thought'
+      ? `<div class="step">${esc(t.text)}</div>`
+      : `<div class="step tool"><b>${esc(t.name)}</b><pre>${js(t.args)}</pre><pre>${js(t.result)}</pre></div>`;
+  });
+  h += '<h2>Usulan tindakan</h2>';
+  if (!r.proposals.length) h += '<p class="sub">Tidak ada usulan tindakan.</p>';
+  r.proposals.forEach(p => {
+    h += `<div class="card" id="p${p.id}">
+      <div class="row"><b>${esc(p.tool)}</b><span class="st tag">menunggu persetujuan</span></div>
+      <pre>${js(p.args)}</pre>
+      <div class="row" style="justify-content:flex-start;margin-top:8px">
+        <button onclick="decide('${esc(r.run_id)}',${p.id},true)">Setujui dan jalankan</button>
+        <button class="ghost" onclick="decide('${esc(r.run_id)}',${p.id},false)">Tolak</button>
+      </div></div>`;
+  });
+  $('#run').innerHTML = h;
+}
+
+async function decide(runId, id, approve) {
+  try {
+    const p = await api('/api/decide', {run_id: runId, proposal_id: id, approve});
+    const card = $('#p' + id);
+    card.querySelector('.st').textContent = p.status === 'approved' ? 'dijalankan' : 'ditolak';
+    card.querySelectorAll('button').forEach(b => b.remove());
+    if (p.result) card.insertAdjacentHTML('beforeend', `<pre>${js(p.result)}</pre>`);
+  } catch (e) { alert(e.message); }
+}
+
+load().catch(e => $('#alerts').innerHTML = `<div class="card tag">${esc(e.message)}</div>`);
+</script>
+</body>
+</html>
