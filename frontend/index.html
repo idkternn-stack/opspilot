@@ -5,112 +5,272 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpsPilot</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--ink:#14181f;--mute:#5d6673;--line:#dde1e7;--acc:#0b6e4f;--warn:#b4491f}
-@media (prefers-color-scheme:dark){:root{--bg:#10141a;--card:#181e27;--ink:#e8ebf0;--mute:#9aa4b2;--line:#2a3340;--acc:#3ecf9a;--warn:#f0956a}}
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14181f;--mute:#5d6673;--line:#dde1e7;--acc:#0b6e4f;--acc-soft:#e3f2ec;--warn:#b4491f;--warn-soft:#fbeae3;--busy:#8a6d00;--busy-soft:#fbf3d5}
+@media (prefers-color-scheme:dark){:root{--bg:#10141a;--card:#181e27;--ink:#e8ebf0;--mute:#9aa4b2;--line:#2a3340;--acc:#3ecf9a;--acc-soft:#173528;--warn:#f0956a;--warn-soft:#3a2219;--busy:#e5c454;--busy-soft:#352e14}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
-main{max-width:860px;margin:0 auto;padding:24px 16px 64px}
-h1{font-size:26px;margin:0}h2{font-size:17px;margin:28px 0 10px}
-.sub{color:var(--mute);margin:4px 0 20px}.meta{color:var(--mute);font-size:13px;margin:-12px 0 8px}
+main{max-width:1180px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:26px;margin:0}h2{font-size:16px;margin:24px 0 10px}h3{font-size:15px;margin:18px 0 8px}
+.sub{color:var(--mute);margin:4px 0 0}.small{font-size:13px;color:var(--mute)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:10px 0}
-.row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-button{font:inherit;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:6px;padding:7px 14px;cursor:pointer}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.left{justify-content:flex-start}
+button{font:inherit;font-size:14px;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer}
+@media (prefers-color-scheme:dark){button{color:#0d1a14}}
 button.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
-button:disabled{opacity:.5;cursor:not-allowed}
-button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-.step{border-left:3px solid var(--line);padding:4px 0 4px 12px;margin:8px 0;white-space:pre-wrap}
-.step.tool{border-color:var(--acc)}.step b{color:var(--acc)}
-pre{white-space:pre-wrap;word-break:break-word;margin:4px 0 0;color:var(--mute);font-size:12.5px;max-height:180px;overflow:auto}
-.tag{color:var(--warn);font-weight:600}.sum{white-space:pre-wrap}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,.alert:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+@media (min-width:980px){.layout{grid-template-columns:400px minmax(0,1fr)}}
+.alert{cursor:pointer}.alert.sel{border-color:var(--acc);box-shadow:inset 3px 0 0 var(--acc)}
+.alert b{display:block}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:99px;background:var(--line);color:var(--ink)}
+.pill.ok{background:var(--acc-soft);color:var(--acc)}.pill.warn{background:var(--warn-soft);color:var(--warn)}.pill.busy{background:var(--busy-soft);color:var(--busy)}
+.switch{display:inline-flex;align-items:center;gap:8px;font-weight:600;cursor:pointer}
+.switch input{width:38px;height:22px;appearance:none;background:var(--line);border-radius:99px;position:relative;cursor:pointer;margin:0}
+.switch input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+.switch input:checked{background:var(--acc)}.switch input:checked::after{left:19px}
+.banner{border-radius:8px;padding:10px 14px;margin:10px 0;font-weight:600}
+.banner.replay{background:var(--busy-soft);color:var(--busy)}.banner.err{background:var(--warn-soft);color:var(--warn)}
+.summary p{margin:0 0 6px}.summary ul{margin:0 0 6px;padding-left:20px}
+.timeline{list-style:none;margin:0;padding:0}
+.timeline li{border-left:3px solid var(--line);padding:4px 0 6px 12px;margin:0;white-space:pre-wrap;word-break:break-word}
+.timeline li.tool{border-color:var(--acc)}.timeline li.retry,.timeline li.error{border-color:var(--warn);color:var(--warn)}
+.timeline li.verify,.timeline li.proposal{border-color:var(--busy)}
+.timeline li.status,.timeline li.replay{color:var(--mute)}
+.tl-name{font-weight:600}
+details summary{cursor:pointer;color:var(--mute);font-size:13px}
+pre{white-space:pre-wrap;word-break:break-word;margin:4px 0 0;color:var(--mute);font-size:12.5px;max-height:220px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mute);font-weight:600}
+tr.click{cursor:pointer}
+.empty{color:var(--mute);padding:28px 4px}
+.spinner{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--busy);margin-right:6px;animation:pulse 1s infinite ease-in-out}
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:min(560px,calc(100% - 32px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;z-index:9}
+@keyframes pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.spinner{animation:none}.switch input::after{transition:none}}
 </style>
 </head>
 <body>
 <main>
   <h1>OpsPilot</h1>
-  <p class="sub">Agent yang menyelidiki anomali operasional, mencari akar masalah, dan mengusulkan tindakan. Setiap aksi menunggu persetujuanmu.</p>
-  <p class="meta" id="meta"></p>
-  <h2>Anomali terdeteksi</h2>
-  <div id="alerts"><p class="sub">Memuat…</p></div>
-  <div id="run"></div>
+  <p class="sub">Agent yang memantau data operasional, menyelidiki anomali, dan mengusulkan tindakan. Setiap aksi menunggu persetujuanmu.</p>
+
+  <div class="card row" id="controls">
+    <div>
+      <label class="switch"><input type="checkbox" id="autopilot" aria-describedby="apText"> Autopilot</label>
+      <div class="small" id="apText">Memuat…</div>
+    </div>
+    <div class="row left">
+      <button class="ghost" id="btnCheck">Cek sekarang</button>
+      <button class="ghost" id="btnReset">Reset data demo</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <section aria-labelledby="hAlerts">
+      <h2 id="hAlerts">Anomali</h2>
+      <div id="alerts"><p class="empty">Memuat…</p></div>
+      <h2>Riwayat investigasi</h2>
+      <div class="card" style="padding:6px 10px"><table><thead><tr><th>Waktu</th><th>Anomali</th><th>Pemicu</th><th>Hasil</th></tr></thead><tbody id="history"></tbody></table></div>
+    </section>
+    <section aria-live="polite" aria-labelledby="hRun">
+      <h2 id="hRun">Investigasi</h2>
+      <div id="run"><div class="card empty">Pilih anomali untuk melihat investigasinya. Saat autopilot aktif, anomali baru diinvestigasi otomatis dan progresnya tampil di sini.</div></div>
+    </section>
+  </div>
+  <div id="toast" role="status" hidden></div>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-const esc = t => String(t ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const js = o => esc(JSON.stringify(o, null, 1));
-const OFFLINE = 'Server OpsPilot tidak terhubung. Jalankan start.bat, lalu buka http://127.0.0.1:7860 (jangan buka file index.html langsung).';
+const time = iso => iso ? new Date(iso).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'}) : '-';
+const OFFLINE = 'Server OpsPilot tidak terhubung. Jalankan start.bat, lalu buka http://127.0.0.1:7860.';
+const TYPE = {revenue_drop:'Pendapatan turun', sales_drop:'Penjualan anjlok', discount_anomaly:'Diskon tidak wajar', demand_spike:'Lonjakan permintaan', data_gap:'Data hilang'};
+const STATUS = {open:['Baru',''], queued:['Antre','busy'], investigating:['Diinvestigasi','busy'], awaiting_approval:['Menunggu persetujuan','warn'], resolved:['Selesai ditangani','ok'], closed:['Ditutup tanpa aksi','ok'], error:['Gagal','warn']};
+const RUNSTATUS = {queued:['Antre','busy'], running:['Berjalan','busy'], done:['Selesai','ok'], error:['Gagal','warn']};
+const pill = ([t, c]) => `<span class="pill ${c}">${esc(t)}</span>`;
+
+let S = {selected: null, userPicked: false, run: null, events: [], lastId: 0, alerts: []};
 
 async function api(url, body) {
   let r;
-  try {
-    r = await fetch(url, body && {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-  } catch { throw new Error(OFFLINE); }
+  try { r = await fetch(url, body !== undefined ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : undefined); }
+  catch { throw new Error(OFFLINE); }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.detail || `Terjadi kesalahan (${r.status})`);
   return d;
 }
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.hidden = true, 5000);
+}
 
-function lockButtons(locked) { document.querySelectorAll('#alerts button').forEach(b => b.disabled = locked); }
+// ---------------------------------------------------------------- state
+async function refreshState() {
+  const st = await api('/api/state');
+  S.alerts = st.alerts;
+  const ap = st.autopilot;
+  $('#autopilot').checked = ap.enabled;
+  const mins = Math.round(ap.interval_s / 60);
+  $('#apText').innerHTML = (ap.enabled ? `Aktif: memantau data tiap ${mins} menit dan menginvestigasi anomali baru otomatis.` : 'Nonaktif: investigasi hanya berjalan saat kamu menekan tombol.')
+    + ` Cek terakhir ${time(ap.last_check)}. Model ${esc(st.model)}${st.fallback_model ? `, cadangan ${esc(st.fallback_model)}` : ''}.`
+    + (ap.current_run ? ' <span class="spinner"></span>Agent sedang bekerja.' : '');
+  renderAlerts(st.alerts);
+  renderHistory(st.runs);
+  if (!S.userPicked) {
+    const follow = ap.current_run || (st.runs[0] && st.runs[0].id);
+    if (follow && follow !== S.selected) selectRun(follow, false);
+  }
+}
 
-async function load() {
-  api('/api/info').then(i => $('#meta').textContent = `Model: ${i.model}`).catch(() => {});
-  const list = await api('/api/alerts');
+function renderAlerts(list) {
   const box = $('#alerts');
-  box.innerHTML = list.length ? '' : '<p class="sub">Tidak ada anomali saat ini.</p>';
+  if (!list.length) { box.innerHTML = '<div class="card empty">Tidak ada anomali. Data operasional dalam kondisi normal.</div>'; return; }
+  box.innerHTML = '';
   list.forEach(a => {
+    const busy = a.status === 'queued' || a.status === 'investigating';
     const card = document.createElement('div');
-    card.className = 'card row';
-    card.innerHTML = `<div><b>${esc(a.title)}</b><div class="sub" style="margin:0">${esc(a.type)}</div></div>`;
-    const btn = document.createElement('button');
-    btn.textContent = 'Investigasi';
-    btn.onclick = () => investigate(a, btn);
-    card.append(btn);
+    card.className = 'card alert' + (S.run && S.run.alert_id === a.id ? ' sel' : '');
+    card.tabIndex = 0;
+    card.innerHTML = `<b>${esc(a.title)}</b>
+      <div class="row" style="margin-top:6px"><span class="small">${esc(TYPE[a.type] || a.type)}</span>${pill(STATUS[a.status] || [a.status, ''])}</div>
+      <div class="row left" style="margin-top:8px"></div>`;
+    const actions = card.querySelector('.row.left');
+    const inv = document.createElement('button');
+    inv.textContent = busy ? 'Sedang diproses…' : (a.run_id ? 'Investigasi ulang' : 'Investigasi');
+    inv.disabled = busy;
+    inv.onclick = e => { e.stopPropagation(); start('/api/investigate', a.id); };
+    actions.append(inv);
+    if (a.has_recording) {
+      const rep = document.createElement('button');
+      rep.className = 'ghost'; rep.textContent = 'Putar rekaman'; rep.disabled = busy;
+      rep.onclick = e => { e.stopPropagation(); start('/api/replay', a.id); };
+      actions.append(rep);
+    }
+    const open = () => { if (a.run_id) selectRun(a.run_id, true); };
+    card.onclick = open;
+    card.onkeydown = e => { if (e.key === 'Enter') open(); };
     box.append(card);
   });
 }
 
-async function investigate(alert, btn) {
-  lockButtons(true);
-  btn.textContent = 'Agent bekerja…';
-  $('#run').innerHTML = '<p class="sub">Agent merencanakan dan menjalankan investigasi. Biasanya butuh 10–60 detik.</p>';
-  try { render(await api('/api/investigate', {alert_id: alert.id})); }
-  catch (e) { $('#run').innerHTML = `<div class="card tag">${esc(e.message)}</div>`; }
-  lockButtons(false);
-  btn.textContent = 'Investigasi';
+function renderHistory(runs) {
+  $('#history').innerHTML = runs.length ? runs.map(r => {
+    const res = r.status === 'done' ? (r.verified ? 'Terverifikasi' : 'Selesai') : (RUNSTATUS[r.status] || [r.status])[0];
+    return `<tr class="click" data-id="${esc(r.id)}"><td>${time(r.created_at)}</td><td>${esc(r.title || r.alert_id)}${r.mode === 'replay' ? ' <span class="pill busy">rekaman</span>' : ''}</td><td>${r.trigger === 'autopilot' ? 'Autopilot' : 'Manual'}</td><td>${esc(res)}${r.duration_s ? `<div class="small">${r.duration_s} dtk, ${r.steps ?? '-'} langkah</div>` : ''}</td></tr>`;
+  }).join('') : '<tr><td colspan="4" class="small">Belum ada investigasi.</td></tr>';
+  document.querySelectorAll('#history tr.click').forEach(tr => tr.onclick = () => selectRun(tr.dataset.id, true));
 }
 
-function render(r) {
-  let h = `<h2>Hasil investigasi</h2><div class="card sum">${esc(r.summary)}</div>`;
-  h += `<h2>Jejak langkah agent (${r.steps} langkah)</h2>`;
-  r.trace.forEach(t => {
-    h += t.type === 'thought'
-      ? `<div class="step">${esc(t.text)}</div>`
-      : `<div class="step tool"><b>${esc(t.name)}</b><pre>${js(t.args)}</pre><pre>${js(t.result)}</pre></div>`;
-  });
-  h += '<h2>Usulan tindakan</h2>';
-  if (!r.proposals.length) h += '<p class="sub">Tidak ada usulan tindakan.</p>';
-  r.proposals.forEach(p => {
-    h += `<div class="card" id="p${p.id}">
-      <div class="row"><b>${esc(p.tool)}</b><span class="st tag">menunggu persetujuan</span></div>
-      <pre>${js(p.args)}</pre>
-      <div class="row" style="justify-content:flex-start;margin-top:8px">
-        <button onclick="decide('${esc(r.run_id)}',${p.id},true)">Setujui dan jalankan</button>
-        <button class="ghost" onclick="decide('${esc(r.run_id)}',${p.id},false)">Tolak</button>
-      </div></div>`;
-  });
+async function start(url, alertId) {
+  try { const r = await api(url, {alert_id: alertId}); await selectRun(r.run_id, true); refreshState(); }
+  catch (e) { toast(e.message); }
+}
+
+// ---------------------------------------------------------------- run
+async function selectRun(id, picked) {
+  if (picked) S.userPicked = true;
+  S.selected = id; S.run = null; S.events = []; S.lastId = 0;
+  await pollRun();
+  renderAlerts(S.alerts);
+  if (picked && window.innerWidth < 980) $('#hRun').scrollIntoView({behavior: 'smooth'});
+}
+
+async function pollRun() {
+  if (!S.selected) return;
+  const id = S.selected;
+  const r = await api(`/api/runs/${id}?after=${S.lastId}`);
+  if (id !== S.selected) return;
+  S.events.push(...r.events);
+  if (r.events.length) S.lastId = r.events[r.events.length - 1].id;
+  S.run = r;
+  renderRun();
+}
+
+function md(text) {
+  const lines = esc(text).split('\n');
+  let html = '', inList = false;
+  for (const raw of lines) {
+    const line = raw.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    const m = line.match(/^\s*[-*•]\s+(.*)/);
+    if (m) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${m[1]}</li>`; continue; }
+    if (inList) { html += '</ul>'; inList = false; }
+    if (line.trim()) html += `<p>${line}</p>`;
+  }
+  return html + (inList ? '</ul>' : '');
+}
+
+function eventHtml(e) {
+  const d = e.data;
+  switch (e.kind) {
+    case 'tool': return `<li class="tool"><span class="tl-name">${esc(d.name)}</span><details><summary>input dan hasil</summary><pre>${js(d.args)}</pre><pre>${js(d.result)}</pre></details></li>`;
+    case 'thought': return `<li class="thought">${esc(d.text)}</li>`;
+    case 'proposal': return `<li class="proposal"><span class="tl-name">Mengusulkan:</span> ${esc(d.label)}</li>`;
+    case 'verify': return `<li class="verify"><span class="tl-name">Verifikasi diri.</span> ${esc(d.text)}</li>`;
+    case 'draft': return `<li class="status"><details><summary>Draf ringkasan sebelum verifikasi</summary><pre>${esc(d.text)}</pre></details></li>`;
+    case 'final': return `<li class="${d.verified ? 'verify' : 'status'}">${d.verified ? 'Kesimpulan lolos verifikasi diri.' : 'Agent selesai tanpa konfirmasi verifikasi.'}</li>`;
+    case 'decision': return `<li class="status">Keputusan manusia: ${esc(d.label)} (${esc(d.status)})</li>`;
+    case 'error': return `<li class="error">${esc(d.text)}</li>`;
+    default: return `<li class="${esc(e.kind)}">${esc(d.text || '')}</li>`;
+  }
+}
+
+function proposalHtml(p, canDecide) {
+  const done = {approved:['Dijalankan','ok'], rejected:['Ditolak',''], failed:['Gagal dijalankan','warn'], pending:['Menunggu persetujuan','warn']}[p.status];
+  let h = `<div class="card" id="p${p.id}"><div class="row"><b>${esc(p.label)}</b>${pill(done)}</div>`;
+  h += `<details><summary>detail</summary><pre>${js(p.args)}</pre></details>`;
+  if (p.result) h += `<div class="small" style="margin-top:6px">${esc(p.result.verification || p.result.error || '')}</div>`;
+  if (p.status === 'pending') h += `<div class="row left" style="margin-top:8px"><button ${canDecide ? '' : 'disabled'} onclick="decide(${p.id},true)">Setujui dan jalankan</button><button class="ghost" ${canDecide ? '' : 'disabled'} onclick="decide(${p.id},false)">Tolak</button></div>`;
+  return h + '</div>';
+}
+
+function renderRun() {
+  const r = S.run; if (!r) return;
+  const active = r.status === 'queued' || r.status === 'running';
+  const verified = r.status === 'done' ? (r.verified ? pill(['Terverifikasi','ok']) : pill(['Belum terverifikasi','warn'])) : '';
+  let h = `<div class="card"><div class="row"><b>${esc(r.alert ? r.alert.title : r.alert_id)}</b><span>${r.mode === 'replay' ? pill(['Rekaman','busy']) : pill(['Langsung',''])} ${pill(RUNSTATUS[r.status] || [r.status,''])} ${verified}</span></div>
+    <div class="small" style="margin-top:4px">${r.trigger === 'autopilot' ? 'Dipicu autopilot' : 'Dipicu manual'} · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik · ${r.steps} langkah · ${r.tool_calls} panggilan tool` : ''}</div></div>`;
+  if (r.mode === 'replay') h += '<div class="banner replay">Ini rekaman investigasi sebelumnya, bukan investigasi langsung. Usulan tindakan tetap divalidasi terhadap data saat ini.</div>';
+  if (r.status === 'error') {
+    h += `<div class="banner err">${esc(r.error)}</div><div class="row left"><button onclick="start('/api/investigate','${esc(r.alert_id)}')">Coba lagi</button>${r.has_recording ? `<button class="ghost" onclick="start('/api/replay','${esc(r.alert_id)}')">Putar rekaman</button>` : ''}</div>`;
+  }
+  if (r.summary) h += `<h3>Ringkasan</h3><div class="card summary">${md(r.summary)}</div>`;
+  if (r.proposals.length || r.status === 'done') {
+    h += '<h3>Usulan tindakan</h3>';
+    h += r.proposals.length ? r.proposals.map(p => proposalHtml(p, !active)).join('') : '<p class="small">Agent tidak mengusulkan tindakan.</p>';
+    if (active && r.proposals.length) h += '<p class="small">Persetujuan bisa diberikan setelah investigasi selesai.</p>';
+  }
+  h += `<h3>Jejak langkah agent</h3>`;
+  if (active) h += `<p class="small"><span class="spinner"></span>${r.status === 'queued' ? 'Menunggu giliran di antrean…' : 'Agent sedang bekerja. Langkah baru muncul otomatis.'}</p>`;
+  h += `<ol class="timeline">${S.events.map(eventHtml).join('') || '<li class="status">Belum ada langkah.</li>'}</ol>`;
   $('#run').innerHTML = h;
 }
 
-async function decide(runId, id, approve) {
-  try {
-    const p = await api('/api/decide', {run_id: runId, proposal_id: id, approve});
-    const card = $('#p' + id);
-    card.querySelector('.st').textContent = p.status === 'approved' ? 'dijalankan' : 'ditolak';
-    card.querySelectorAll('button').forEach(b => b.remove());
-    if (p.result) card.insertAdjacentHTML('beforeend', `<pre>${js(p.result)}</pre>`);
-  } catch (e) { alert(e.message); }
+async function decide(id, approve) {
+  try { await api('/api/decide', {proposal_id: id, approve}); S.events = []; S.lastId = 0; await pollRun(); refreshState(); }
+  catch (e) { toast(e.message); }
 }
 
-load().catch(e => $('#alerts').innerHTML = `<div class="card tag">${esc(e.message)}</div>`);
+// ---------------------------------------------------------------- kontrol
+$('#autopilot').onchange = async e => { try { await api('/api/autopilot', {enabled: e.target.checked}); refreshState(); } catch (err) { toast(err.message); } };
+$('#btnCheck').onclick = async () => { try { const r = await api('/api/check', {}); if (!r.new_alerts.length) toast('Tidak ada anomali baru.'); refreshState(); } catch (e) { toast(e.message); } };
+$('#btnReset').onclick = async () => {
+  if (!confirm('Kembalikan data demo ke kondisi awal dan hapus riwayat investigasi? Rekaman tetap disimpan.')) return;
+  try { await api('/api/reset', {}); S = {selected:null, userPicked:false, run:null, events:[], lastId:0, alerts:[]}; $('#run').innerHTML = '<div class="card empty">Data demo dikembalikan ke kondisi awal.</div>'; refreshState(); }
+  catch (e) { toast(e.message); }
+};
+
+async function loop() {
+  try { await refreshState(); } catch (e) { $('#alerts').innerHTML = `<div class="banner err">${esc(e.message)}</div>`; }
+  setTimeout(loop, 3000);
+}
+async function runLoop() {
+  const active = S.run && (S.run.status === 'queued' || S.run.status === 'running');
+  try { if (active) await pollRun(); } catch {}
+  setTimeout(runLoop, 1000);
+}
+loop(); runLoop();
 </script>
 </body>
 </html>

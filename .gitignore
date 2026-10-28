@@ -1,5 +1,8 @@
 .env
 __pycache__/
 *.pyc
-data/opspilot.db
+data/*.db
+data/*.db-*
+eval/tmp/
 .venv/
+*.zip
