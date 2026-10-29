@@ -7,7 +7,7 @@ import traceback
 
 from google.genai import errors as genai_errors
 
-from . import agent, config, detect, store, tools
+from . import agent, config, detect, research, simulate, store, tools
 
 
 def log(msg):
@@ -34,6 +34,7 @@ class DbSink:
 class Engine:
     def __init__(self):
         self.queue = queue.Queue()
+        self.research_queue = queue.Queue()
         self.autopilot = config.AUTOPILOT
         self.last_check = None
         self.current_run = None
@@ -48,6 +49,7 @@ class Engine:
         self._started = True
         threading.Thread(target=self._worker, name="opspilot-worker", daemon=True).start()
         threading.Thread(target=self._monitor, name="opspilot-monitor", daemon=True).start()
+        threading.Thread(target=self._research_worker, name="opspilot-research", daemon=True).start()
 
     def set_autopilot(self, enabled):
         self.autopilot = bool(enabled)
@@ -83,6 +85,16 @@ class Engine:
         log(f"antre {run_id} untuk {alert_id} ({trigger}, {mode})")
         return run_id
 
+    def enqueue_research(self, company):
+        company = research.clean_company(company)
+        rid = store.create_research(company)
+        self.research_queue.put(rid)
+        log(f"antre riset {rid} untuk {company}")
+        return rid
+
+    def simulate(self, research_id, issue_id):
+        return simulate.simulate_issue(research_id, issue_id, self)
+
     def clear_queue(self):
         while not self.queue.empty():
             try:
@@ -112,6 +124,34 @@ class Engine:
                 traceback.print_exc()
             finally:
                 self.current_run = None
+
+    def _research_worker(self):
+        while True:
+            rid = self.research_queue.get()
+            try:
+                self._execute_research(rid)
+            except Exception:
+                traceback.print_exc()
+
+    def _execute_research(self, rid):
+        rec = store.get_research_row(rid)
+        if not rec:
+            return
+        started = time.time()
+        store.update_research(rid, status="running", started_at=store._now())
+        sink = DbSink(rid, None)
+        try:
+            result = research.research_company(rec["company"], sink)
+        except Exception as e:
+            message = self._friendly_error(e)
+            log(f"riset {rid} gagal: {message}")
+            store.add_event(rid, "error", {"text": message})
+            store.update_research(rid, status="error", error=message, finished_at=store._now(),
+                                  duration_s=round(time.time() - started, 1))
+            return
+        store.update_research(rid, status="done", result=result, model=result["model"], finished_at=store._now(),
+                              duration_s=round(time.time() - started, 1))
+        log(f"riset {rid} selesai: {len(result['issues'])} masalah terverifikasi")
 
     def _execute(self, run_id):
         run = store.get_run_row(run_id)

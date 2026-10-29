@@ -15,6 +15,8 @@ OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, agent berb
 | Progres langsung | Setiap langkah agent tampil di UI saat terjadi |
 | Jejak audit | Semua investigasi, langkah, usulan, dan keputusan tersimpan di database terpisah |
 | Mode rekaman | Bila Gemini sedang sibuk saat demo, investigasi sebelumnya bisa diputar ulang dengan label jelas "rekaman" |
+| Riset perusahaan nyata | Ketik nama perusahaan apa pun; OpsPilot mencari masalah operasional terbarunya lewat Google Search, memverifikasi sumber, menilai dampak, dan merujuk SOP |
+| Simulasi kasus nyata | Temuan riset bisa disimulasikan di data toko demo, lalu diinvestigasi agent seperti anomali biasa |
 | Evaluasi otomatis | 8 skenario dengan akar masalah diketahui; akurasi diagnosis, ketepatan aksi, keamanan, dan waktu diukur otomatis |
 
 ## Arsitektur
@@ -45,6 +47,15 @@ flowchart LR
 | Data | SQLite: data toko sintetis 30 hari (4 toko, 8 produk) + database audit terpisah |
 | RAG | TF-IDF (scikit-learn) atas 6 dokumen SOP di `data/sop` |
 | Frontend | HTML + JavaScript tanpa framework, polling progres tiap detik |
+
+## Riset perusahaan nyata
+
+1. **Cari:** Gemini dengan Grounding with Google Search menulis temuan dalam format tetap (judul, tanggal, kategori, ringkasan).
+2. **Verifikasi (kode, bukan LLM):** setiap temuan dipetakan ke sumbernya lewat metadata grounding. Temuan tanpa sumber dibuang. Temuan yang sumbernya hanya media sosial ditandai "belum terkonfirmasi". Tanggal lebih dari 180 hari atau di masa depan ditandai.
+3. **Analisis:** dampak operasional, tingkat risiko, mitigasi sesuai SOP (RAG), dan jenis skenario yang paling mirip.
+4. **Simulasi:** pola masalahnya diterapkan ke data toko demo. Injeksi dicoba dulu di salinan database dan baru diterapkan bila detektor benar-benar menghasilkan anomali baru. Anomali diberi label "simulasi kasus <perusahaan>" dan langsung diinvestigasi.
+
+Temuan selalu berasal dari sumber publik, bukan data internal perusahaan. Nama perusahaan dari pengguna dibersihkan dan dibatasi 80 karakter sebelum dipakai di prompt.
 
 ## Skenario anomali
 
@@ -108,6 +119,9 @@ Hasil evaluasi tersimpan di `eval/results/` dalam format Markdown dan JSON.
 | POST | `/api/replay` | Putar rekaman investigasi |
 | GET | `/api/runs/{id}?after=n` | Detail investigasi dan langkah baru |
 | POST | `/api/decide` | Setujui atau tolak usulan |
+| POST | `/api/research` | Mulai riset perusahaan `{"company": "..."}` |
+| GET | `/api/research/{id}?after=n` | Hasil riset dan langkah baru |
+| POST | `/api/research/{id}/simulate` | Simulasikan satu temuan `{"issue_id": 1}` |
 | POST | `/api/reset` | Kembalikan data demo ke kondisi awal |
 
 ## Struktur
@@ -118,7 +132,9 @@ backend/
   tools.py      tool baca, tool aksi, validasi
   detect.py     detektor anomali
   scenarios.py  data sintetis dan skenario
-  engine.py     autopilot, antrean, mode rekaman
+  research.py   riset perusahaan lewat Google Search dan verifikasi sumber
+  simulate.py   simulasi pola kasus nyata ke data demo
+  engine.py     autopilot, antrean, riset, mode rekaman
   store.py      jejak audit dan rekaman
   main.py       API
   evaluate.py   evaluasi otomatis

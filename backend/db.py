@@ -17,14 +17,14 @@ def _uri(path, mode):
     return pathlib.Path(path).resolve().as_uri() + f"?mode={mode}"
 
 
-def business_ro():
-    con = sqlite3.connect(_uri(config.BUSINESS_DB_PATH, "ro"), uri=True, timeout=10)
+def business_ro(path=None):
+    con = sqlite3.connect(_uri(path or config.BUSINESS_DB_PATH, "ro"), uri=True, timeout=10)
     con.row_factory = sqlite3.Row
     return con
 
 
-def business_rw():
-    con = sqlite3.connect(config.BUSINESS_DB_PATH, timeout=10)
+def business_rw(path=None):
+    con = sqlite3.connect(path or config.BUSINESS_DB_PATH, timeout=10)
     con.row_factory = sqlite3.Row
     return con
 
@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS events(
 CREATE TABLE IF NOT EXISTS proposals(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, alert_id TEXT, tool TEXT, args TEXT,
   label TEXT, status TEXT, result TEXT, created_at TEXT, decided_at TEXT);
+CREATE TABLE IF NOT EXISTS research(
+  id TEXT PRIMARY KEY, company TEXT, status TEXT, model TEXT, result TEXT, error TEXT,
+  created_at TEXT, started_at TEXT, finished_at TEXT, duration_s REAL);
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_runs_alert ON runs(alert_id, created_at);
 """

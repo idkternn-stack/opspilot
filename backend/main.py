@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, scenarios, store, tools
+from . import config, db, scenarios, simulate, store, tools
 from .engine import Engine
 
 engine = Engine()
@@ -20,6 +20,7 @@ async def lifespan(app):
     if not os.path.exists(config.BUSINESS_DB_PATH):
         scenarios.build(config.BUSINESS_DB_PATH)
     store.mark_stale_runs()
+    store.mark_stale_research()
     engine.start()
     if os.environ.get("OPEN_BROWSER") == "1":  # diset oleh start.bat
         threading.Timer(1.0, webbrowser.open, ["http://127.0.0.1:7860"]).start()
@@ -42,10 +43,18 @@ class AutopilotIn(BaseModel):
     enabled: bool
 
 
+class ResearchIn(BaseModel):
+    company: str
+
+
+class SimulateIn(BaseModel):
+    issue_id: int
+
+
 @app.get("/api/state")
 def state():
     return {"model": config.MODEL, "fallback_model": config.FALLBACK_MODEL, "autopilot": engine.status(),
-            "alerts": store.list_alerts(), "runs": store.list_runs(15)}
+            "alerts": store.list_alerts(), "runs": store.list_runs(15), "research": store.list_research(10)}
 
 
 @app.post("/api/autopilot")
@@ -97,6 +106,30 @@ def decide(body: DecisionIn):
     if not proposal:
         raise HTTPException(404, "Usulan tidak ditemukan.")
     return proposal
+
+
+@app.post("/api/research")
+def start_research(body: ResearchIn):
+    try:
+        return {"research_id": engine.enqueue_research(body.company)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/research/{research_id}")
+def research_detail(research_id: str, after: int = 0):
+    rec = store.get_research(research_id, after=after)
+    if not rec:
+        raise HTTPException(404, "Riset tidak ditemukan.")
+    return rec
+
+
+@app.post("/api/research/{research_id}/simulate")
+def simulate_issue(research_id: str, body: SimulateIn):
+    try:
+        return engine.simulate(research_id, body.issue_id)
+    except simulate.SimulationError as e:
+        raise HTTPException(409, str(e))
 
 
 @app.post("/api/reset")

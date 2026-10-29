@@ -48,6 +48,51 @@ class FakeGemini:
         return _resp(types.Part(text="TERVERIFIKASI\n**Akar masalah:** stok habis karena pengiriman terlambat."))
 
 
+RESEARCH_TEXT = """PERUSAHAAN: Ahold Delhaize (Albert Heijn) | Belanda | Ritel bahan makanan
+DITEMUKAN: ya
+### MASALAH
+JUDUL: Serangan siber mengganggu distribusi
+TANGGAL: 2026-10-12
+KATEGORI: sistem_data
+RINGKASAN: Sistem dimatikan setelah aktivitas mencurigakan. Rak kosong dan pengiriman online berhenti hampir dua minggu.
+### MASALAH
+JUDUL: Keluhan aplikasi
+TANGGAL: 2026-10-20
+KATEGORI: lainnya
+RINGKASAN: Pengguna media sosial melaporkan aplikasi lambat.
+### MASALAH
+JUDUL: Klaim tanpa sumber
+TANGGAL: 2026-10-01
+KATEGORI: harga_promo
+RINGKASAN: Kalimat ini tidak didukung sumber mana pun."""
+
+
+class FakeResearch:
+    """Meniru Gemini dengan Google Search: teks temuan + metadata grounding, lalu analisis JSON."""
+
+    def __init__(self):
+        self.models = self
+
+    def generate_content(self, model, contents, config):
+        import json
+        if config.tools:
+            gm = types.GroundingMetadata(
+                grounding_chunks=[types.GroundingChunk(web=types.GroundingChunkWeb(uri="https://example.org/a", title="nltimes.nl")),
+                                  types.GroundingChunk(web=types.GroundingChunkWeb(uri="https://example.org/b", title="threads.com"))],
+                grounding_supports=[
+                    types.GroundingSupport(segment=types.Segment(text="Rak kosong dan pengiriman online berhenti hampir dua minggu."), grounding_chunk_indices=[0]),
+                    types.GroundingSupport(segment=types.Segment(text="Pengguna media sosial melaporkan aplikasi lambat."), grounding_chunk_indices=[1])],
+                web_search_queries=["Albert Heijn masalah terbaru"])
+            return types.GenerateContentResponse(candidates=[types.Candidate(
+                content=types.Content(role="model", parts=[types.Part(text=RESEARCH_TEXT)]), grounding_metadata=gm)])
+        body = {"ringkasan": "Risiko gangguan sistem tinggi.", "temuan": [
+            {"nomor": 1, "dampak": "Distribusi berhenti", "risiko": "tinggi", "mitigasi": ["Prosedur manual"],
+             "sop": ["sop_data_pos.md"], "skenario": "data_gap", "alasan_skenario": "Sistem mati"},
+            {"nomor": 2, "dampak": "-", "risiko": "rendah", "mitigasi": [], "sop": [], "skenario": "none",
+             "alasan_skenario": "Tidak tampak di data toko"}]}
+        return _resp(types.Part(text=json.dumps(body)))
+
+
 def check(cond, msg):
     if not cond:
         raise AssertionError(msg)
@@ -122,6 +167,38 @@ def main():
         rep = store.get_run(replay_id)
         check(rep["status"] == "done" and rep["events"][0]["kind"] == "replay", "rekaman diputar dengan label jelas")
         check(len(rep["proposals"]) == 1, "usulan rekaman divalidasi ulang terhadap data saat ini")
+
+        print("Riset perusahaan dan simulasi")
+        from backend import research
+        fake_search = FakeResearch()
+        rid = store.create_research("Albert Heijn")
+        agent_client = agent._client
+        agent._client = lambda: fake_search
+        eng._execute_research(rid)
+        agent._client = agent_client
+        rec = store.get_research(rid)
+        res = rec["result"]
+        check(rec["status"] == "done" and len(res["issues"]) == 2, "riset selesai dengan 2 temuan bersumber")
+        check(res["dropped"] == ["Klaim tanpa sumber"], "temuan tanpa sumber dibuang")
+        check(res["issues"][1]["confidence"] == "belum_terkonfirmasi", "sumber media sosial ditandai belum terkonfirmasi")
+        try:
+            research.clean_company("")
+            check(False, "nama kosong ditolak")
+        except ValueError:
+            check(True, "nama kosong ditolak")
+        info = eng.simulate(rid, 1)
+        alert = store.get_alert(info["alert_id"])
+        check(alert["type"] == "data_gap" and "simulation" in alert["detail"], "simulasi membuat anomali baru beranotasi kasus")
+        deadline = time.time() + 60
+        while time.time() < deadline and store.get_run_row(info["run_id"])["status"] in ("queued", "running"):
+            time.sleep(0.2)
+        check(store.get_run_row(info["run_id"])["status"] == "done", "anomali simulasi diinvestigasi agent")
+        check(eng.simulate(rid, 1)["run_id"] == info["run_id"], "simulasi yang sama tidak dibuat dua kali")
+        try:
+            eng.simulate(rid, 2)
+            check(False, "temuan tanpa skenario tidak bisa disimulasikan")
+        except ValueError:
+            check(True, "temuan tanpa skenario tidak bisa disimulasikan")
         print("\nSemua tes lulus.")
     finally:
         config.BUSINESS_DB_PATH, config.APP_DB_PATH, config.RECORDINGS_DIR, config.MONITOR_INTERVAL_S = old

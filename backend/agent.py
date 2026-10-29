@@ -49,6 +49,8 @@ Alur kerja:
 
 Aturan:
 - Hanya gunakan angka dan fakta dari hasil tool. Jangan mengarang data.
+- Bila anomali punya detail.simulation, anomali itu adalah simulasi di data demo yang meniru pola kasus publik
+  suatu perusahaan. Sebutkan konteks kasusnya satu kalimat di ringkasan, tetapi semua bukti tetap dari database.
 - Bila query error, baca pesan errornya, perbaiki query, lalu coba lagi.
 - Jawab dalam Bahasa Indonesia."""
 
@@ -133,6 +135,9 @@ def _generate(client, contents, cfg, sink, state):
                 sink.event("retry", {"text": f"{model} sedang sibuk ({e.code}). Percobaan {attempt}/{config.MAX_RETRIES}."})
                 if attempt < config.MAX_RETRIES:
                     time.sleep(min(2 ** attempt, 10))
+    if last is not None and last.code == 429:
+        raise AgentBusyError("Kuota Gemini habis atau terlalu banyak permintaan (429). Tunggu beberapa saat, "
+                             "atau cek batas kuota di Google AI Studio (pencarian Google Search punya kuota sendiri).")
     raise AgentBusyError(f"Gemini sedang sibuk atau tidak merespons ({last.code if last else '?'}). "
                          "Coba lagi beberapa menit lagi, pakai model cadangan, atau putar rekaman.")
 

@@ -36,7 +36,7 @@ button:focus-visible,.alert:focus-visible{outline:2px solid var(--ink);outline-o
 .timeline{list-style:none;margin:0;padding:0}
 .timeline li{border-left:3px solid var(--line);padding:4px 0 6px 12px;margin:0;white-space:pre-wrap;word-break:break-word}
 .timeline li.tool{border-color:var(--acc)}.timeline li.retry,.timeline li.error{border-color:var(--warn);color:var(--warn)}
-.timeline li.verify,.timeline li.proposal{border-color:var(--busy)}
+.timeline li.verify,.timeline li.proposal,.timeline li.sourcecheck{border-color:var(--busy)}
 .timeline li.status,.timeline li.replay{color:var(--mute)}
 .tl-name{font-weight:600}
 details summary{cursor:pointer;color:var(--mute);font-size:13px}
@@ -45,6 +45,11 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;p
 tr.click{cursor:pointer}
 .empty{color:var(--mute);padding:28px 4px}
 .spinner{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--busy);margin-right:6px;animation:pulse 1s infinite ease-in-out}
+input[type=text]{font:inherit;flex:1 1 260px;min-width:0;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.sources{margin:6px 0 0;padding-left:18px;font-size:13px}.sources a{color:var(--acc);word-break:break-word}
+.issue p{margin:6px 0}.issue ul{margin:4px 0 6px;padding-left:20px}
+.list-item{cursor:pointer;padding:8px 0;border-bottom:1px solid var(--line)}.list-item:last-child{border-bottom:0}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:min(560px,calc(100% - 32px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;z-index:9}
 @keyframes pulse{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.spinner{animation:none}.switch input::after{transition:none}}
@@ -66,15 +71,26 @@ tr.click{cursor:pointer}
     </div>
   </div>
 
+  <form class="card" id="researchForm">
+    <label for="company" class="tl-name">Riset perusahaan nyata</label>
+    <div class="row left" style="margin-top:6px">
+      <input type="text" id="company" maxlength="80" autocomplete="off" placeholder="Ketik nama perusahaan, misalnya Alfamart atau Albert Heijn" required>
+      <button type="submit" id="btnResearch">Cari masalah terbaru</button>
+    </div>
+    <div class="small" style="margin-top:6px">OpsPilot mencari berita publik terbaru lewat Google Search. Temuan tanpa sumber dibuang, dan setiap temuan bisa disimulasikan di data toko demo.</div>
+  </form>
+
   <div class="layout">
     <section aria-labelledby="hAlerts">
       <h2 id="hAlerts">Anomali</h2>
       <div id="alerts"><p class="empty">Memuat…</p></div>
+      <h2>Riwayat riset</h2>
+      <div class="card" style="padding:4px 12px" id="researchList"></div>
       <h2>Riwayat investigasi</h2>
       <div class="card" style="padding:6px 10px"><table><thead><tr><th>Waktu</th><th>Anomali</th><th>Pemicu</th><th>Hasil</th></tr></thead><tbody id="history"></tbody></table></div>
     </section>
     <section aria-live="polite" aria-labelledby="hRun">
-      <h2 id="hRun">Investigasi</h2>
+      <h2 id="hRun">Detail</h2>
       <div id="run"><div class="card empty">Pilih anomali untuk melihat investigasinya. Saat autopilot aktif, anomali baru diinvestigasi otomatis dan progresnya tampil di sini.</div></div>
     </section>
   </div>
@@ -91,7 +107,9 @@ const STATUS = {open:['Baru',''], queued:['Antre','busy'], investigating:['Diinv
 const RUNSTATUS = {queued:['Antre','busy'], running:['Berjalan','busy'], done:['Selesai','ok'], error:['Gagal','warn']};
 const pill = ([t, c]) => `<span class="pill ${c}">${esc(t)}</span>`;
 
-let S = {selected: null, userPicked: false, run: null, events: [], lastId: 0, alerts: []};
+const TRIGGER = {autopilot:'Autopilot', manual:'Manual', simulasi:'Simulasi kasus'};
+const RISK = {tinggi:['Risiko tinggi','warn'], sedang:['Risiko sedang','busy'], rendah:['Risiko rendah','ok']};
+let S = {view: 'run', selected: null, userPicked: false, run: null, research: null, events: [], lastId: 0, alerts: []};
 
 async function api(url, body) {
   let r;
@@ -118,7 +136,8 @@ async function refreshState() {
     + (ap.current_run ? ' <span class="spinner"></span>Agent sedang bekerja.' : '');
   renderAlerts(st.alerts);
   renderHistory(st.runs);
-  if (!S.userPicked) {
+  renderResearchList(st.research || []);
+  if (!S.userPicked && S.view === 'run') {
     const follow = ap.current_run || (st.runs[0] && st.runs[0].id);
     if (follow && follow !== S.selected) selectRun(follow, false);
   }
@@ -131,7 +150,7 @@ function renderAlerts(list) {
   list.forEach(a => {
     const busy = a.status === 'queued' || a.status === 'investigating';
     const card = document.createElement('div');
-    card.className = 'card alert' + (S.run && S.run.alert_id === a.id ? ' sel' : '');
+    card.className = 'card alert' + (S.view === 'run' && S.run && S.run.alert_id === a.id ? ' sel' : '');
     card.tabIndex = 0;
     card.innerHTML = `<b>${esc(a.title)}</b>
       <div class="row" style="margin-top:6px"><span class="small">${esc(TYPE[a.type] || a.type)}</span>${pill(STATUS[a.status] || [a.status, ''])}</div>
@@ -158,7 +177,7 @@ function renderAlerts(list) {
 function renderHistory(runs) {
   $('#history').innerHTML = runs.length ? runs.map(r => {
     const res = r.status === 'done' ? (r.verified ? 'Terverifikasi' : 'Selesai') : (RUNSTATUS[r.status] || [r.status])[0];
-    return `<tr class="click" data-id="${esc(r.id)}"><td>${time(r.created_at)}</td><td>${esc(r.title || r.alert_id)}${r.mode === 'replay' ? ' <span class="pill busy">rekaman</span>' : ''}</td><td>${r.trigger === 'autopilot' ? 'Autopilot' : 'Manual'}</td><td>${esc(res)}${r.duration_s ? `<div class="small">${r.duration_s} dtk, ${r.steps ?? '-'} langkah</div>` : ''}</td></tr>`;
+    return `<tr class="click" data-id="${esc(r.id)}"><td>${time(r.created_at)}</td><td>${esc(r.title || r.alert_id)}${r.mode === 'replay' ? ' <span class="pill busy">rekaman</span>' : ''}</td><td>${esc(TRIGGER[r.trigger] || r.trigger)}</td><td>${esc(res)}${r.duration_s ? `<div class="small">${r.duration_s} dtk, ${r.steps ?? '-'} langkah</div>` : ''}</td></tr>`;
   }).join('') : '<tr><td colspan="4" class="small">Belum ada investigasi.</td></tr>';
   document.querySelectorAll('#history tr.click').forEach(tr => tr.onclick = () => selectRun(tr.dataset.id, true));
 }
@@ -171,17 +190,17 @@ async function start(url, alertId) {
 // ---------------------------------------------------------------- run
 async function selectRun(id, picked) {
   if (picked) S.userPicked = true;
-  S.selected = id; S.run = null; S.events = []; S.lastId = 0;
+  S.view = 'run'; S.selected = id; S.run = null; S.research = null; S.events = []; S.lastId = 0;
   await pollRun();
   renderAlerts(S.alerts);
   if (picked && window.innerWidth < 980) $('#hRun').scrollIntoView({behavior: 'smooth'});
 }
 
 async function pollRun() {
-  if (!S.selected) return;
+  if (!S.selected || S.view !== 'run') return;
   const id = S.selected;
   const r = await api(`/api/runs/${id}?after=${S.lastId}`);
-  if (id !== S.selected) return;
+  if (id !== S.selected || S.view !== 'run') return;
   S.events.push(...r.events);
   if (r.events.length) S.lastId = r.events[r.events.length - 1].id;
   S.run = r;
@@ -211,6 +230,7 @@ function eventHtml(e) {
     case 'draft': return `<li class="status"><details><summary>Draf ringkasan sebelum verifikasi</summary><pre>${esc(d.text)}</pre></details></li>`;
     case 'final': return `<li class="${d.verified ? 'verify' : 'status'}">${d.verified ? 'Kesimpulan lolos verifikasi diri.' : 'Agent selesai tanpa konfirmasi verifikasi.'}</li>`;
     case 'decision': return `<li class="status">Keputusan manusia: ${esc(d.label)} (${esc(d.status)})</li>`;
+    case 'search': return `<li class="tool"><span class="tl-name">Google Search.</span> ${esc(d.text)}</li>`;
     case 'error': return `<li class="error">${esc(d.text)}</li>`;
     default: return `<li class="${esc(e.kind)}">${esc(d.text || '')}</li>`;
   }
@@ -230,7 +250,9 @@ function renderRun() {
   const active = r.status === 'queued' || r.status === 'running';
   const verified = r.status === 'done' ? (r.verified ? pill(['Terverifikasi','ok']) : pill(['Belum terverifikasi','warn'])) : '';
   let h = `<div class="card"><div class="row"><b>${esc(r.alert ? r.alert.title : r.alert_id)}</b><span>${r.mode === 'replay' ? pill(['Rekaman','busy']) : pill(['Langsung',''])} ${pill(RUNSTATUS[r.status] || [r.status,''])} ${verified}</span></div>
-    <div class="small" style="margin-top:4px">${r.trigger === 'autopilot' ? 'Dipicu autopilot' : 'Dipicu manual'} · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik · ${r.steps} langkah · ${r.tool_calls} panggilan tool` : ''}</div></div>`;
+    <div class="small" style="margin-top:4px">Pemicu: ${esc(TRIGGER[r.trigger] || r.trigger)} · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik · ${r.steps} langkah · ${r.tool_calls} panggilan tool` : ''}</div></div>`;
+  const sim = r.alert && r.alert.detail && r.alert.detail.simulation;
+  if (sim) h += `<div class="banner replay">Simulasi pola kasus ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Ini data toko demo, bukan data internal perusahaan.</div>`;
   if (r.mode === 'replay') h += '<div class="banner replay">Ini rekaman investigasi sebelumnya, bukan investigasi langsung. Usulan tindakan tetap divalidasi terhadap data saat ini.</div>';
   if (r.status === 'error') {
     h += `<div class="banner err">${esc(r.error)}</div><div class="row left"><button onclick="start('/api/investigate','${esc(r.alert_id)}')">Coba lagi</button>${r.has_recording ? `<button class="ghost" onclick="start('/api/replay','${esc(r.alert_id)}')">Putar rekaman</button>` : ''}</div>`;
@@ -252,12 +274,100 @@ async function decide(id, approve) {
   catch (e) { toast(e.message); }
 }
 
+// ---------------------------------------------------------------- riset
+function renderResearchList(list) {
+  $('#researchList').innerHTML = list.length ? list.map(r => {
+    const st = r.status === 'done' ? `${r.issue_count} masalah terverifikasi` : (RUNSTATUS[r.status] || [r.status])[0];
+    return `<div class="list-item" data-id="${esc(r.id)}" tabindex="0"><b>${esc(r.company_name)}</b><div class="small">${time(r.created_at)} · ${esc(st)}</div></div>`;
+  }).join('') : '<p class="small">Belum ada riset. Ketik nama perusahaan di atas.</p>';
+  document.querySelectorAll('#researchList .list-item').forEach(el => {
+    el.onclick = () => selectResearch(el.dataset.id);
+    el.onkeydown = e => { if (e.key === 'Enter') selectResearch(el.dataset.id); };
+  });
+}
+
+async function selectResearch(id) {
+  S.userPicked = true; S.view = 'research'; S.selected = id; S.run = null; S.research = null; S.events = []; S.lastId = 0;
+  await pollResearch();
+  renderAlerts(S.alerts);
+  if (window.innerWidth < 980) $('#hRun').scrollIntoView({behavior: 'smooth'});
+}
+
+async function pollResearch() {
+  if (!S.selected || S.view !== 'research') return;
+  const id = S.selected;
+  const r = await api(`/api/research/${id}?after=${S.lastId}`);
+  if (id !== S.selected || S.view !== 'research') return;
+  S.events.push(...r.events);
+  if (r.events.length) S.lastId = r.events[r.events.length - 1].id;
+  S.research = r;
+  renderResearch();
+}
+
+const safeUrl = u => /^https:\/\//i.test(u || '') ? u : null;
+
+function issueHtml(rid, i) {
+  let h = `<div class="card issue"><div class="row"><b>${esc(i.title)}</b><span>${pill([i.category_label,''])} ${i.confidence === 'terkonfirmasi' ? pill(['Terkonfirmasi','ok']) : pill(['Belum terkonfirmasi','warn'])} ${i.risk ? pill(RISK[i.risk]) : ''}</span></div>`;
+  h += `<div class="small">${esc(i.date || 'tanggal tidak jelas')}${i.flags.length ? ' · ' + esc(i.flags.join(', ')) : ''}</div>`;
+  h += `<p>${esc(i.summary)}</p>`;
+  h += `<div class="small">Sumber:</div><ol class="sources">${i.sources.map(s => { const u = safeUrl(s.url); return `<li>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)}</li>`; }).join('')}</ol>`;
+  if (i.impact) h += `<p><b>Dampak operasional:</b> ${esc(i.impact)}</p>`;
+  if (i.mitigation.length) h += `<b>Mitigasi:</b><ul>${i.mitigation.map(m => `<li>${esc(m)}</li>`).join('')}</ul>`;
+  if (i.sop.length) h += `<div class="small">SOP dirujuk: ${esc(i.sop.join(', '))}</div>`;
+  if (i.simulated) {
+    h += `<div class="row left" style="margin-top:10px"><button class="ghost" onclick="selectRun('${esc(i.simulated.run_id)}', true)">Lihat investigasi simulasi</button><span class="small">${esc(i.simulated.alert_title)}</span></div>`;
+  } else if (i.scenario && i.scenario !== 'none') {
+    h += `<div class="row left" style="margin-top:10px"><button onclick="simulateIssue('${esc(rid)}', ${i.id}, this)">Simulasikan di OpsPilot</button><span class="small">Pola: ${esc(i.scenario_label)}${i.scenario_reason ? '. ' + esc(i.scenario_reason) : ''}</span></div>`;
+  } else {
+    h += `<div class="small" style="margin-top:8px">Tidak bisa disimulasikan di data toko${i.scenario_reason ? ': ' + esc(i.scenario_reason) : '.'}</div>`;
+  }
+  return h + '</div>';
+}
+
+function renderResearch() {
+  const r = S.research; if (!r) return;
+  const res = r.result;
+  const active = r.status === 'queued' || r.status === 'running';
+  const name = res && res.company.name ? res.company.name : r.company;
+  let h = `<div class="card"><div class="row"><b>Riset: ${esc(name)}</b><span>${pill(['Sumber publik',''])} ${pill(RUNSTATUS[r.status] || [r.status,''])}</span></div>
+    <div class="small" style="margin-top:4px">Dicari "${esc(r.company)}" · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik` : ''}${res && (res.company.country || res.company.sector) ? ' · ' + esc([res.company.country, res.company.sector].filter(Boolean).join(', ')) : ''}</div></div>`;
+  if (active) h += `<p class="small"><span class="spinner"></span>${r.status === 'queued' ? 'Menunggu giliran…' : 'Mencari berita, memverifikasi sumber, dan menganalisis dampak…'}</p>`;
+  if (r.status === 'error') h += `<div class="banner err">${esc(r.error)}</div>`;
+  if (res) {
+    h += '<div class="banner replay">Temuan berasal dari sumber publik, bukan data internal perusahaan. Simulasi memakai data toko demo.</div>';
+    if (res.overall) h += `<h3>Gambaran risiko</h3><div class="card summary">${md(res.overall)}</div>`;
+    h += `<h3>Temuan terverifikasi (${res.issues.length})</h3>`;
+    h += res.issues.length ? res.issues.map(i => issueHtml(r.id, i)).join('') : '<p class="small">Tidak ada temuan yang didukung sumber.</p>';
+    if (res.dropped.length) h += `<p class="small">${res.dropped.length} temuan dibuang karena tidak didukung sumber: ${esc(res.dropped.join('; '))}.</p>`;
+  }
+  h += `<h3>Langkah riset</h3><ol class="timeline">${S.events.map(eventHtml).join('') || '<li class="status">Belum ada langkah.</li>'}</ol>`;
+  $('#run').innerHTML = h;
+}
+
+async function simulateIssue(rid, issueId, btn) {
+  btn.disabled = true; btn.textContent = 'Menyiapkan simulasi…';
+  try {
+    const info = await api(`/api/research/${rid}/simulate`, {issue_id: issueId});
+    toast(`Anomali simulasi dibuat: ${info.alert_title}`);
+    await selectRun(info.run_id, true); refreshState();
+  } catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Simulasikan di OpsPilot'; }
+}
+
+$('#researchForm').onsubmit = async e => {
+  e.preventDefault();
+  const name = $('#company').value.trim(); if (!name) return;
+  const btn = $('#btnResearch'); btn.disabled = true;
+  try { const r = await api('/api/research', {company: name}); $('#company').value = ''; await selectResearch(r.research_id); refreshState(); }
+  catch (err) { toast(err.message); }
+  btn.disabled = false;
+};
+
 // ---------------------------------------------------------------- kontrol
 $('#autopilot').onchange = async e => { try { await api('/api/autopilot', {enabled: e.target.checked}); refreshState(); } catch (err) { toast(err.message); } };
 $('#btnCheck').onclick = async () => { try { const r = await api('/api/check', {}); if (!r.new_alerts.length) toast('Tidak ada anomali baru.'); refreshState(); } catch (e) { toast(e.message); } };
 $('#btnReset').onclick = async () => {
   if (!confirm('Kembalikan data demo ke kondisi awal dan hapus riwayat investigasi? Rekaman tetap disimpan.')) return;
-  try { await api('/api/reset', {}); S = {selected:null, userPicked:false, run:null, events:[], lastId:0, alerts:[]}; $('#run').innerHTML = '<div class="card empty">Data demo dikembalikan ke kondisi awal.</div>'; refreshState(); }
+  try { await api('/api/reset', {}); S = {view:'run', selected:null, userPicked:false, run:null, research:null, events:[], lastId:0, alerts:[]}; $('#run').innerHTML = '<div class="card empty">Data demo dikembalikan ke kondisi awal.</div>'; refreshState(); }
   catch (e) { toast(e.message); }
 };
 
@@ -266,8 +376,11 @@ async function loop() {
   setTimeout(loop, 3000);
 }
 async function runLoop() {
-  const active = S.run && (S.run.status === 'queued' || S.run.status === 'running');
-  try { if (active) await pollRun(); } catch {}
+  const busy = x => x && (x.status === 'queued' || x.status === 'running');
+  try {
+    if (S.view === 'run' && busy(S.run)) await pollRun();
+    if (S.view === 'research' && busy(S.research)) await pollResearch();
+  } catch {}
   setTimeout(runLoop, 1000);
 }
 loop(); runLoop();

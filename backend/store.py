@@ -232,3 +232,67 @@ def load_recording(alert_id):
         return None
     with open(_recording_path(alert_id), encoding="utf-8") as fh:
         return json.load(fh)
+
+
+# ---------------------------------------------------------------- research
+def create_research(company):
+    rid = "rs" + uuid.uuid4().hex[:8]
+    _write("INSERT INTO research(id, company, status, created_at) VALUES (?,?,?,?)", (rid, company, "queued", _now()))
+    return rid
+
+
+def update_research(rid, **fields):
+    if "result" in fields and not isinstance(fields["result"], str):
+        fields["result"] = json.dumps(fields["result"], ensure_ascii=False)
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    _write(f"UPDATE research SET {cols} WHERE id = ?", (*fields.values(), rid))
+
+
+def get_research_row(rid):
+    rows = _read("SELECT * FROM research WHERE id = ?", (rid,))
+    return rows[0] if rows else None
+
+
+def get_research(rid, after=0):
+    rec = get_research_row(rid)
+    if not rec:
+        return None
+    rec["result"] = json.loads(rec["result"]) if rec["result"] else None
+    if rec["result"]:
+        for issue in rec["result"].get("issues", []):
+            sim = issue.get("simulated")
+            if sim and not get_run_row(sim.get("run_id") or ""):
+                issue["simulated"] = None  # data demo sudah di-reset
+    rec["events"] = [{"id": e["id"], "kind": e["kind"], "data": json.loads(e["data"]), "at": e["created_at"]}
+                     for e in _read("SELECT * FROM events WHERE run_id = ? AND id > ? ORDER BY id", (rid, after))]
+    return rec
+
+
+def list_research(limit=10):
+    rows = _read("SELECT id, company, status, created_at, duration_s, result FROM research "
+                 "ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,))
+    for r in rows:
+        res = json.loads(r.pop("result")) if r.get("result") else None
+        r["issue_count"] = len(res["issues"]) if res else None
+        r["company_name"] = (res or {}).get("company", {}).get("name") or r["company"]
+    return rows
+
+
+def set_issue_simulated(rid, issue_id, info):
+    with db.APP_WRITE_LOCK:
+        con = db.app()
+        try:
+            row = con.execute("SELECT result FROM research WHERE id = ?", (rid,)).fetchone()
+            result = json.loads(row["result"])
+            for issue in result["issues"]:
+                if issue["id"] == issue_id:
+                    issue["simulated"] = info
+            con.execute("UPDATE research SET result = ? WHERE id = ?", (json.dumps(result, ensure_ascii=False), rid))
+            con.commit()
+        finally:
+            con.close()
+
+
+def mark_stale_research():
+    for r in _read("SELECT id FROM research WHERE status IN ('queued','running')"):
+        update_research(r["id"], status="error", error="Server berhenti sebelum riset selesai.", finished_at=_now())

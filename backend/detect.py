@@ -13,13 +13,13 @@ DISCOUNT_BASE = 0.10
 GAP_WINDOW_DAYS = 7
 
 
-def detect_alerts(today=None):
+def detect_alerts(today=None, path=None):
     today = today or dt.date.today()
     recent_start = (today - dt.timedelta(days=RECENT_DAYS)).isoformat()
     base_end = (today - dt.timedelta(days=BASELINE_GAP_DAYS)).isoformat()
     gap_start = (today - dt.timedelta(days=GAP_WINDOW_DAYS)).isoformat()
     alerts = []
-    con = db.business_ro()
+    con = db.business_ro(path)
     try:
         # 1. Pendapatan toko turun
         drop_stores = set()
