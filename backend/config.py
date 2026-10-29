@@ -8,7 +8,8 @@ import os
 from dotenv import load_dotenv
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(ROOT, ".env"))
+# override=True: isi .env selalu menang atas environment variable lama di Windows
+load_dotenv(os.path.join(ROOT, ".env"), override=True)
 
 DATA_DIR = os.path.join(ROOT, "data")
 BUSINESS_DB_PATH = os.path.join(DATA_DIR, "opspilot.db")  # data operasional (dibaca agent)

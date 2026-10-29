@@ -5,6 +5,7 @@ Setiap langkah dikirim ke `sink` supaya bisa disimpan dan ditampilkan langsung d
 """
 import json
 import os
+import re
 import time
 
 from google import genai
@@ -117,10 +118,22 @@ def _client():
     return genai.Client(api_key=key, http_options=types.HttpOptions(timeout=config.REQUEST_TIMEOUT_MS))
 
 
+def _quota_info(e):
+    """Membaca jenis kuota dan jeda yang diminta Google dari detail error 429."""
+    raw = json.dumps(e.details, default=str) if e.details else ""
+    quota_ids = re.findall(r'"quotaId":\s*"([^"]+)"', raw)
+    m = re.search(r'"retryDelay":\s*"(\d+(?:\.\d+)?)s"', raw)
+    return quota_ids, (float(m.group(1)) if m else None), any("PerDay" in q for q in quota_ids)
+
+
 def _generate(client, contents, cfg, sink, state):
-    """Coba ulang untuk error sementara, lalu pindah ke model cadangan bila ada."""
+    """Coba ulang untuk error sementara, lalu pindah ke model cadangan bila ada.
+
+    429 per menit: tunggu sesuai retryDelay dari Google. 429 per hari: langsung pindah model,
+    karena mencoba ulang tidak akan berhasil sampai kuota harian di-reset.
+    """
     models = [config.MODEL] + ([config.FALLBACK_MODEL] if config.FALLBACK_MODEL else [])
-    last = None
+    last, daily_out = None, []
     for model in models[models.index(state["model"]):] if state["model"] in models else models:
         if model != state["model"]:
             sink.event("status", {"text": f"Pindah ke model cadangan {model}."})
@@ -132,12 +145,27 @@ def _generate(client, contents, cfg, sink, state):
                 if e.code not in BUSY_CODES:
                     raise
                 last = e
+                if e.code == 429:
+                    quota_ids, delay, daily = _quota_info(e)
+                    if daily:
+                        daily_out.append(model)
+                        sink.event("retry", {"text": f"Kuota harian {model} habis ({', '.join(quota_ids)})."})
+                        break
+                    wait = min((delay or 10 * attempt) + 1, 60)
+                    sink.event("retry", {"text": f"{model} mencapai batas permintaan per menit. "
+                                                 f"Menunggu {round(wait)} detik ({attempt}/{config.MAX_RETRIES})."})
+                    if attempt < config.MAX_RETRIES:
+                        time.sleep(wait)
+                    continue
                 sink.event("retry", {"text": f"{model} sedang sibuk ({e.code}). Percobaan {attempt}/{config.MAX_RETRIES}."})
                 if attempt < config.MAX_RETRIES:
                     time.sleep(min(2 ** attempt, 10))
+    if daily_out:
+        raise AgentBusyError(f"Kuota harian Gemini gratis habis untuk {', '.join(daily_out)}. Kuota biasanya di-reset "
+                             "tengah malam waktu Pasifik (sekitar pukul 14.00-15.00 WIB). Coba model lain dari "
+                             "cek_model.py di GEMINI_FALLBACK_MODEL, atau putar rekaman.")
     if last is not None and last.code == 429:
-        raise AgentBusyError("Kuota Gemini habis atau terlalu banyak permintaan (429). Tunggu beberapa saat, "
-                             "atau cek batas kuota di Google AI Studio (pencarian Google Search punya kuota sendiri).")
+        raise AgentBusyError("Batas permintaan per menit Gemini tercapai (429). Tunggu 1-2 menit lalu coba lagi.")
     raise AgentBusyError(f"Gemini sedang sibuk atau tidak merespons ({last.code if last else '?'}). "
                          "Coba lagi beberapa menit lagi, pakai model cadangan, atau putar rekaman.")
 

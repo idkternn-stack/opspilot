@@ -70,7 +70,7 @@ Temuan selalu berasal dari sumber publik, bukan data internal perusahaan. Nama p
 | `data_pos_jakarta` | Data hilang karena sinkronisasi POS gagal | Tiket IT, tanpa aksi stok/harga |
 | `toko_tutup_surabaya` | Pendapatan turun karena renovasi terjadwal | Tidak perlu tindakan korektif |
 
-Demo memakai 5 skenario pertama yang berbeda jenis. Evaluasi menjalankan kedelapannya satu per satu.
+Data toko demo dimulai **bersih tanpa anomali**. Alur demo: riset perusahaan nyata, simulasikan temuannya, lalu agent menyelesaikannya. Skenario di tabel ini dipakai evaluasi (dijalankan satu per satu) dan tes offline.
 
 ## Guardrails dan mitigasi risiko
 
@@ -91,7 +91,8 @@ Demo memakai 5 skenario pertama yang berbeda jenis. Evaluasi menjalankan kedelap
    GEMINI_API_KEY=key_kamu
    GEMINI_FALLBACK_MODEL=gemini-3.5-flash
    ```
-3. Klik dua kali `start.bat`. Browser terbuka otomatis ke http://127.0.0.1:7860 dan autopilot langsung bekerja.
+3. Klik dua kali `start.bat`. Browser terbuka otomatis ke http://127.0.0.1:7860.
+4. Ketik nama perusahaan di **Riset perusahaan nyata**, lalu klik **Simulasikan di OpsPilot** pada temuan yang ingin diselesaikan.
 
 Cara manual:
 ```bash

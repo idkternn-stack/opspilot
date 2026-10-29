@@ -115,7 +115,9 @@ def main():
         scenarios.build(config.BUSINESS_DB_PATH, [])
         check(detect.detect_alerts() == [], "data normal tanpa anomali palsu")
         scenarios.build(config.BUSINESS_DB_PATH)
-        check(len(detect.detect_alerts()) == len(scenarios.DEMO), "set demo menghasilkan 5 anomali")
+        check(detect.detect_alerts() == [], "data demo dimulai bersih tanpa anomali")
+        scenarios.build(config.BUSINESS_DB_PATH, scenarios.EXAMPLE_SET)
+        check(len(detect.detect_alerts()) == len(scenarios.EXAMPLE_SET), "set contoh menghasilkan 5 anomali")
 
         print("Guardrail")
         try:
@@ -143,7 +145,7 @@ def main():
                                           or not store.list_runs()):
             time.sleep(0.2)
         runs = store.list_runs()
-        check(len(runs) == len(scenarios.DEMO), "autopilot menginvestigasi semua anomali")
+        check(len(runs) == len(scenarios.EXAMPLE_SET), "autopilot menginvestigasi semua anomali")
         rev = next(r for r in runs if r["alert_id"] == "rev:2")
         run = store.get_run(rev["id"])
         check(run["status"] == "done" and run["verified"], "investigasi selesai dan terverifikasi")

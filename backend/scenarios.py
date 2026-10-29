@@ -89,7 +89,11 @@ SCENARIOS = {
     },
 }
 
-DEMO = ["stockout_bandung_minyak", "discount_surabaya_beras", "supplier_gula_multi_toko",
+# Data demo dimulai bersih: anomali hanya muncul dari simulasi kasus perusahaan nyata.
+DEMO = []
+
+# Set contoh beberapa anomali sekaligus, dipakai tes offline.
+EXAMPLE_SET = ["stockout_bandung_minyak", "discount_surabaya_beras", "supplier_gula_multi_toko",
         "lonjakan_medan_mie", "data_pos_jakarta"]
 
 BUSINESS_SCHEMA = """

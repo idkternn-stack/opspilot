@@ -1,5 +1,6 @@
 """Mesin autopilot: memantau data, mengantrekan investigasi, dan menjalankannya satu per satu."""
 import datetime as dt
+import os
 import queue
 import threading
 import time
@@ -207,7 +208,9 @@ class Engine:
         if isinstance(e, genai_errors.APIError):
             text = e.message or ""
             if e.code in (400, 401, 403) and "api key" in text.lower():
-                return "GEMINI_API_KEY ditolak. Periksa isi file .env."
+                key = os.environ.get("GEMINI_API_KEY", "")
+                return (f"GEMINI_API_KEY ditolak Google (key berakhiran ...{key[-4:]}). "
+                        f"Pesan Google: {text} Buat key baru di AI Studio, isi .env, lalu jalankan ulang start.bat.")
             if e.code == 404:
                 return f"Model tidak ditemukan ({config.MODEL}). Periksa GEMINI_MODEL di .env."
             return f"Gemini API error {e.code}: {text}"
