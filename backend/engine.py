@@ -6,9 +6,7 @@ import threading
 import time
 import traceback
 
-from google.genai import errors as genai_errors
-
-from . import agent, config, detect, research, simulate, store, tools
+from . import agent, config, detect, llm, research, simulate, store, tools
 
 
 def log(msg):
@@ -86,12 +84,17 @@ class Engine:
         log(f"antre {run_id} untuk {alert_id} ({trigger}, {mode})")
         return run_id
 
-    def enqueue_research(self, company):
+    def enqueue_research(self, company, refresh=False):
         company = research.clean_company(company)
+        if not refresh:
+            cached = store.find_cached_research(company, config.RESEARCH_CACHE_HOURS)
+            if cached:
+                log(f"riset {company} memakai cache {cached}")
+                return cached, True
         rid = store.create_research(company)
         self.research_queue.put(rid)
         log(f"antre riset {rid} untuk {company}")
-        return rid
+        return rid, False
 
     def simulate(self, research_id, issue_id):
         return simulate.simulate_issue(research_id, issue_id, self)
@@ -174,6 +177,8 @@ class Engine:
                              duration_s=round(time.time() - started, 1))
             store.set_alert_status(alert["id"], "error")
             return
+        if result.get("mode") == "rules":
+            log(f"{run_id} memakai diagnosis berbasis aturan (tanpa AI)")
         store.update_run(run_id, status="done", summary=result["summary"], verified=int(bool(result["verified"])),
                          steps=result["steps"], tool_calls=result["tool_calls"], model=result["model"],
                          finished_at=store._now(), duration_s=round(time.time() - started, 1))
@@ -203,15 +208,6 @@ class Engine:
 
     @staticmethod
     def _friendly_error(e):
-        if isinstance(e, agent.AgentBusyError):
+        if isinstance(e, (llm.LLMUnavailable, llm.LLMConfigError)):
             return str(e)
-        if isinstance(e, genai_errors.APIError):
-            text = e.message or ""
-            if e.code in (400, 401, 403) and "api key" in text.lower():
-                key = os.environ.get("GEMINI_API_KEY", "")
-                return (f"GEMINI_API_KEY ditolak Google (key berakhiran ...{key[-4:]}). "
-                        f"Pesan Google: {text} Buat key baru di AI Studio, isi .env, lalu jalankan ulang start.bat.")
-            if e.code == 404:
-                return f"Model tidak ditemukan ({config.MODEL}). Periksa GEMINI_MODEL di .env."
-            return f"Gemini API error {e.code}: {text}"
         return str(e) or e.__class__.__name__

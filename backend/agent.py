@@ -1,99 +1,58 @@
-"""Loop agent OpsPilot dengan Gemini.
+"""Agent investigasi OpsPilot, versi hemat kuota.
 
-Alur: rencana -> kumpulkan bukti (tool) -> usulkan tindakan -> ringkasan -> verifikasi diri.
-Setiap langkah dikirim ke `sink` supaya bisa disimpan dan ditampilkan langsung di UI.
+Alur per anomali:
+1. Bukti dikumpulkan otomatis oleh kode (evidence.py): query SQL read-only, estimasi kerugian, RAG SOP.
+2. Satu panggilan LLM menalar: rencana, akar masalah, bukti (merujuk ID bukti), SOP, dampak, dan tindakan.
+   Bila AI butuh data lain, ia boleh meminta maksimal 2 query SQL tambahan (satu putaran), lalu menyimpulkan.
+3. Verifikasi dilakukan kode: setiap angka di klaim harus ada di bukti yang dirujuk, SOP harus berasal dari
+   hasil RAG, dan setiap tindakan divalidasi tool. Bila ada klaim tak didukung, satu panggilan perbaikan.
+4. Bila semua model AI tidak bisa dipakai, diagnosis berbasis aturan (rules.py) dipakai dengan label jelas.
+
+Rata-rata 1-2 panggilan LLM per investigasi (sebelumnya 6-16).
 """
 import json
-import os
 import re
-import time
 
-from google import genai
-from google.genai import errors, types
+from . import config, evidence, llm, rules, tools
 
-from . import config, tools
+AgentBusyError = llm.LLMUnavailable  # nama lama, dipakai modul lain
 
-BUSY_CODES = (429, 500, 503, 504)
-
-SCHEMA = """stores(id, name, city)
-products(id, name, category, price, cost, base_qty)          -- price = harga jual, cost = harga pokok
-sales(date, store_id, product_id, qty, discount)              -- satu baris per toko-produk-hari
-inventory(store_id, product_id, stock, reorder_point)
-deliveries(store_id, product_id, supplier, expected_date, received_date, status)  -- status DELIVERED/DELAYED
-promotions(store_id, product_id, discount, active, start_date)
-pos_sync_log(store_id, date, status, note)                    -- status OK/FAILED
-store_events(store_id, start_date, end_date, event)           -- kegiatan terjadwal, misal renovasi
-stock_transfers(id, product_id, from_store_id, to_store_id, qty, reason, created_at)"""
-
-SYSTEM = f"""Kamu adalah OpsPilot, agent investigasi anomali operasional untuk jaringan toko retail.
-
-Database SQLite (read-only):
-{SCHEMA}
-Pendapatan = qty * price * (1 - discount). Tanggal berformat YYYY-MM-DD.
-
-Alur kerja:
-1. Tulis rencana investigasi singkat (2-4 poin) sebelum memanggil tool.
-2. Kumpulkan bukti dengan run_sql_readonly. Sebelum menyimpulkan penurunan penjualan, cek juga stok,
-   pengiriman, promo, store_events, dan pos_sync_log yang relevan.
-3. Cari prosedur yang berlaku dengan search_sop.
-4. Bila relevan, hitung dampak finansial dengan estimate_loss untuk menentukan prioritas.
-5. Usulkan tindakan sesuai SOP dengan create_ticket, send_notification, transfer_stock, atau pause_promo.
-   Tindakan tidak langsung dijalankan: manusia akan menyetujui atau menolaknya.
-   Jangan mengusulkan tindakan yang tidak diperlukan (misalnya transfer stok untuk toko yang tutup terjadwal
-   atau untuk data yang belum lengkap). Bila usulan ditolak validasi, baca pesannya dan perbaiki parameternya.
-6. Tutup dengan ringkasan berformat:
-**Akar masalah:** satu-dua kalimat
-**Bukti:** poin-poin berisi angka dari hasil tool
-**SOP dirujuk:** nama file SOP
-**Dampak:** estimasi dampak per hari bila ada
-**Tindakan diusulkan:** daftar tindakan, atau "Tidak perlu tindakan" beserta alasannya
+SYSTEM = """Kamu adalah OpsPilot, agent investigasi anomali operasional untuk jaringan toko retail.
+Kamu menerima anomali dan bukti yang sudah dikumpulkan tool (setiap bukti punya ID seperti E3).
+Tugasmu menalar akar masalah dan memutuskan tindakan sesuai SOP.
 
 Aturan:
-- Hanya gunakan angka dan fakta dari hasil tool. Jangan mengarang data.
-- Bila anomali punya detail.simulation, anomali itu adalah simulasi di data demo yang meniru pola kasus publik
-  suatu perusahaan. Sebutkan konteks kasusnya satu kalimat di ringkasan, tetapi semua bukti tetap dari database.
-- Bila query error, baca pesan errornya, perbaiki query, lalu coba lagi.
-- Jawab dalam Bahasa Indonesia."""
+- Hanya pakai fakta dan angka dari bukti. Setiap klaim wajib merujuk ID bukti, dan angka di klaim harus
+  disalin persis dari bukti yang dirujuk. Jangan menghitung angka baru.
+- Sebelum menyimpulkan penurunan penjualan, periksa stok, pengiriman, promo, kegiatan toko, dan log POS.
+- Jangan mengusulkan tindakan yang tidak perlu: tidak ada aksi korektif untuk kegiatan terjadwal yang disetujui,
+  dan tidak ada aksi stok/harga bila data penjualan belum lengkap.
+- Transfer stok: toko asal tidak boleh turun di bawah reorder point.
+- Bila anomali punya detail.simulation, itu simulasi di data demo yang meniru pola kasus publik suatu
+  perusahaan. Sebut konteksnya satu kalimat di akar_masalah; bukti tetap dari data.
+- Tulis dalam Bahasa Indonesia. Balas HANYA JSON valid."""
 
-VERIFY_PROMPT = ("Sebelum selesai, verifikasi ringkasanmu: periksa setiap angka dan klaim terhadap hasil tool di "
-                 "percakapan ini, dan pastikan tindakan yang diusulkan sesuai SOP. Jika ada klaim yang belum didukung "
-                 "bukti, panggil tool untuk melengkapinya lalu tulis ulang ringkasan. Jika semuanya sudah didukung, "
-                 "balas dengan ringkasan final yang baris pertamanya tepat berisi kata TERVERIFIKASI. "
-                 "Jangan mengusulkan ulang tindakan yang sudah diusulkan.")
+SCHEMA = """stores(id, name, city); products(id, name, category, price, cost, base_qty);
+sales(date, store_id, product_id, qty, discount); inventory(store_id, product_id, stock, reorder_point);
+deliveries(store_id, product_id, supplier, expected_date, received_date, status);
+promotions(store_id, product_id, discount, active, start_date); pos_sync_log(store_id, date, status, note);
+store_events(store_id, start_date, end_date, event)"""
 
+ACTIONS_DOC = """Tindakan yang tersedia (semua menunggu persetujuan manusia):
+- create_ticket {"title": str, "priority": "HIGH"|"MEDIUM"|"LOW", "description": str}
+- send_notification {"to": str, "message": str}
+- transfer_stock {"product_id": int, "from_store_id": int, "to_store_id": int, "qty": int, "reason": str}
+- pause_promo {"store_id": int, "product_id": int, "reason": str}"""
 
-def _fn(name, description, props, required=None):
-    return {"name": name, "description": description,
-            "parameters": {"type": "object", "properties": props,
-                           "required": list(props) if required is None else required}}
-
-
-STR, INT = {"type": "string"}, {"type": "integer"}
-DECLARATIONS = [
-    _fn("run_sql_readonly", "Menjalankan satu query SELECT pada database operasional. Maksimal 50 baris hasil.",
-        {"query": {"type": "string", "description": "Query SQL SELECT"}}),
-    _fn("search_sop", "Mencari dokumen SOP perusahaan yang relevan dengan kata kunci.",
-        {"query": {"type": "string", "description": "Kata kunci atau pertanyaan"}}),
-    _fn("estimate_loss", "Menghitung estimasi dampak finansial per hari untuk satu produk di satu toko "
-                         "(pendapatan hilang dan kerugian karena menjual di bawah harga pokok).",
-        {"store_id": INT, "product_id": INT}),
-    _fn("create_ticket", "Mengusulkan tiket tindak lanjut ke tim terkait. Dijalankan setelah disetujui manusia.",
-        {"title": STR, "priority": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]}, "description": STR}),
-    _fn("send_notification", "Mengusulkan notifikasi ke pihak terkait. Dijalankan setelah disetujui manusia.",
-        {"to": {"type": "string", "description": "Penerima, misalnya Store Manager Bandung Dago"}, "message": STR}),
-    _fn("transfer_stock", "Mengusulkan transfer stok antar toko. Toko asal tidak boleh turun di bawah reorder point. "
-                          "Dijalankan setelah disetujui manusia.",
-        {"product_id": INT, "from_store_id": INT, "to_store_id": INT, "qty": INT,
-         "reason": {"type": "string", "description": "Alasan singkat"}}, ["product_id", "from_store_id", "to_store_id", "qty"]),
-    _fn("pause_promo", "Mengusulkan penghentian promo/diskon aktif untuk satu produk di satu toko. "
-                       "Dijalankan setelah disetujui manusia.",
-        {"store_id": INT, "product_id": INT, "reason": {"type": "string", "description": "Alasan singkat"}},
-        ["store_id", "product_id"]),
-]
-
-
-class AgentBusyError(RuntimeError):
-    """Semua percobaan ke Gemini gagal karena server sibuk atau timeout."""
+RESPONSE_DOC = """Bentuk JSON jawaban:
+{"rencana": ["langkah penalaran singkat", "..."],
+ "query_tambahan": [{"alasan": "...", "sql": "SELECT ..."}],
+ "akar_masalah": "1-2 kalimat",
+ "bukti": [{"klaim": "fakta dengan angka dari bukti", "ref": ["E1"]}],
+ "sop": ["nama_file_sop.md"],
+ "dampak": "estimasi dampak bila ada di bukti, atau kosong",
+ "tindakan": [{"tool": "create_ticket", "args": {...}, "alasan": "..."}],
+ "alasan_tanpa_tindakan": "isi bila tindakan kosong"}"""
 
 
 class MemorySink:
@@ -111,155 +70,190 @@ class MemorySink:
         return len(self.proposals)
 
 
-def _client():
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY belum diatur. Isi file .env terlebih dahulu.")
-    return genai.Client(api_key=key, http_options=types.HttpOptions(timeout=config.REQUEST_TIMEOUT_MS))
+# ------------------------------------------------------------------ verifikasi berbasis kode
+_NUM = re.compile(r"(?<![\w.])(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)(\s*%)?")
+_REF = re.compile(r"\bE\d+\b")
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
-def _quota_info(e):
-    """Membaca jenis kuota dan jeda yang diminta Google dari detail error 429."""
-    raw = json.dumps(e.details, default=str) if e.details else ""
-    quota_ids = re.findall(r'"quotaId":\s*"([^"]+)"', raw)
-    m = re.search(r'"retryDelay":\s*"(\d+(?:\.\d+)?)s"', raw)
-    return quota_ids, (float(m.group(1)) if m else None), any("PerDay" in q for q in quota_ids)
+def _numbers_in(obj, acc):
+    if isinstance(obj, bool):
+        return acc
+    if isinstance(obj, (int, float)):
+        acc.add(float(obj))
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _numbers_in(v, acc)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _numbers_in(v, acc)
+    elif isinstance(obj, str):
+        for tok, _pct in _NUM.findall(_DATE.sub(" ", obj)):
+            acc |= _parse_num(tok)
+    return acc
 
 
-def _generate(client, contents, cfg, sink, state):
-    """Coba ulang untuk error sementara, lalu pindah ke model cadangan bila ada.
-
-    429 per menit: tunggu sesuai retryDelay dari Google. 429 per hari: langsung pindah model,
-    karena mencoba ulang tidak akan berhasil sampai kuota harian di-reset.
-    """
-    models = [config.MODEL] + ([config.FALLBACK_MODEL] if config.FALLBACK_MODEL else [])
-    last, daily_out = None, []
-    for model in models[models.index(state["model"]):] if state["model"] in models else models:
-        if model != state["model"]:
-            sink.event("status", {"text": f"Pindah ke model cadangan {model}."})
-            state["model"] = model
-        for attempt in range(1, config.MAX_RETRIES + 1):
-            try:
-                return client.models.generate_content(model=model, contents=contents, config=cfg)
-            except errors.APIError as e:
-                if e.code not in BUSY_CODES:
-                    raise
-                last = e
-                if e.code == 429:
-                    quota_ids, delay, daily = _quota_info(e)
-                    if daily:
-                        daily_out.append(model)
-                        sink.event("retry", {"text": f"Kuota harian {model} habis ({', '.join(quota_ids)})."})
-                        break
-                    wait = min((delay or 10 * attempt) + 1, 60)
-                    sink.event("retry", {"text": f"{model} mencapai batas permintaan per menit. "
-                                                 f"Menunggu {round(wait)} detik ({attempt}/{config.MAX_RETRIES})."})
-                    if attempt < config.MAX_RETRIES:
-                        time.sleep(wait)
-                    continue
-                sink.event("retry", {"text": f"{model} sedang sibuk ({e.code}). Percobaan {attempt}/{config.MAX_RETRIES}."})
-                if attempt < config.MAX_RETRIES:
-                    time.sleep(min(2 ** attempt, 10))
-    if daily_out:
-        raise AgentBusyError(f"Kuota harian Gemini gratis habis untuk {', '.join(daily_out)}. Kuota biasanya di-reset "
-                             "tengah malam waktu Pasifik (sekitar pukul 14.00-15.00 WIB). Coba model lain dari "
-                             "cek_model.py di GEMINI_FALLBACK_MODEL, atau putar rekaman.")
-    if last is not None and last.code == 429:
-        raise AgentBusyError("Batas permintaan per menit Gemini tercapai (429). Tunggu 1-2 menit lalu coba lagi.")
-    raise AgentBusyError(f"Gemini sedang sibuk atau tidak merespons ({last.code if last else '?'}). "
-                         "Coba lagi beberapa menit lagi, pakai model cadangan, atau putar rekaman.")
+def _parse_num(tok):
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", tok):
+        out = {float(re.sub(r"[.,]", "", tok))}
+        if tok.count(".") + tok.count(",") == 1:  # "1.5" juga bisa berarti desimal
+            out.add(float(tok.replace(",", ".")))
+        return out
+    return {float(tok.replace(",", "."))}
 
 
-def _visible_text(content):
-    return "\n".join(p.text for p in (content.parts or []) if p.text and not p.thought).strip()
+def _supported(value, pct, pool):
+    targets = {value} | ({value / 100} if pct else set())
+    for t in targets:
+        for n in pool:
+            if abs(t - n) <= max(0.051, abs(n) * 0.02):
+                return True
+    return False
 
 
-def _split_verified(text):
-    lines = text.strip().splitlines()
-    if lines and lines[0].strip().strip("*#_ :").upper().startswith("TERVERIFIKASI"):
-        rest = lines[0].strip().strip("*#_ ")[len("TERVERIFIKASI"):].strip(" :-*")
-        body = "\n".join(([rest] if rest else []) + lines[1:]).strip()
-        return True, body
-    return False, text.strip()
+def verify(result, ev):
+    """Mengembalikan (ringkasan_verifikasi, klaim_tidak_didukung)."""
+    ids = {it["id"]: it for it in ev.items}
+    all_pool = _numbers_in([it["result"] for it in ev.items], set())
+    bad, checked = [], 0
+    for b in result.get("bukti", []):
+        refs = [r for r in b.get("ref", []) if r in ids]
+        pool = _numbers_in([ids[r]["result"] for r in refs], set()) if refs else all_pool
+        text = _REF.sub(" ", _DATE.sub(" ", str(b.get("klaim", ""))))
+        missing = []
+        for tok, pct in _NUM.findall(text):
+            vals = _parse_num(tok)
+            if all(v <= 10 and float(v).is_integer() for v in vals) and not pct:
+                continue  # angka kecil (jumlah hari, toko) tidak dicek
+            checked += 1
+            if not any(_supported(v, bool(pct), pool) for v in vals):
+                missing.append(tok + (pct or ""))
+        if not refs:
+            missing.append("(tanpa rujukan bukti)")
+        b["ok"] = not missing
+        if missing:
+            bad.append({"klaim": b.get("klaim", ""), "tidak_ditemukan": missing})
+    return {"claims": len(result.get("bukti", [])), "numbers_checked": checked, "unsupported": len(bad)}, bad
 
 
-def _proposal_key(tool, args):
-    keys = {"transfer_stock": ("product_id", "from_store_id", "to_store_id"), "pause_promo": ("store_id", "product_id"),
-            "create_ticket": ("title",), "send_notification": ("to",)}[tool]
-    return (tool,) + tuple(str(args.get(k, "")).strip().lower() for k in keys)
+# ------------------------------------------------------------------ ringkasan
+def _summary(result, labels, verification, mode_note=""):
+    lines = []
+    if mode_note:
+        lines.append(f"**Mode:** {mode_note}")
+    lines.append(f"**Akar masalah:** {result.get('akar_masalah', '-')}")
+    if result.get("bukti"):
+        lines.append("**Bukti:**")
+        for b in result["bukti"]:
+            refs = ", ".join(b.get("ref", []))
+            mark = "" if b.get("ok", True) else " (belum terverifikasi)"
+            lines.append(f"- {b.get('klaim', '')} [{refs}]{mark}")
+    lines.append(f"**SOP dirujuk:** {', '.join(result.get('sop', [])) or '-'}")
+    if result.get("dampak"):
+        lines.append(f"**Dampak:** {result['dampak']}")
+    if labels:
+        lines.append("**Tindakan diusulkan:**")
+        lines += [f"- {l}" for l in labels]
+    else:
+        lines.append(f"**Tindakan diusulkan:** Tidak perlu tindakan. {result.get('alasan_tanpa_tindakan', '')}".rstrip())
+    lines.append(f"**Verifikasi kode:** {verification['claims'] - verification['unsupported']} dari {verification['claims']} klaim "
+                 f"didukung bukti ({verification['numbers_checked']} angka dicek).")
+    return "\n".join(lines)
+
+
+def _prompt(alert, ev, final=False, repair=None):
+    parts = ["ANOMALI:\n" + json.dumps(alert, ensure_ascii=False),
+             "BUKTI (dari tool):\n" + json.dumps(ev.for_prompt(), ensure_ascii=False, default=str),
+             ACTIONS_DOC, "Skema database untuk query_tambahan (hanya SELECT): " + SCHEMA, RESPONSE_DOC]
+    if final:
+        parts.append("Ini putaran terakhir: query_tambahan WAJIB kosong. Simpulkan dari bukti yang ada.")
+    else:
+        parts.append(f"Isi query_tambahan (maksimal 2) HANYA bila bukti belum cukup; selain itu kosongkan.")
+    if repair:
+        parts.append("Verifikasi kode menemukan klaim yang angkanya tidak ada di bukti yang dirujuk:\n"
+                     + json.dumps(repair, ensure_ascii=False)
+                     + "\nPerbaiki: salin angka persis dari bukti dan rujuk ID yang benar, atau hapus klaim itu.")
+    return "\n\n".join(parts)
+
+
+def _ask(alert, ev, sink, final=False, repair=None):
+    data, model = llm.complete_json(SYSTEM, _prompt(alert, ev, final, repair), sink)
+    if not isinstance(data, dict):
+        raise ValueError("Jawaban AI bukan objek JSON.")
+    return data, model
+
+
+def _proposals(result, sink):
+    labels, seen = [], set()
+    for a in result.get("tindakan", []) or []:
+        tool = a.get("tool")
+        if tool not in tools.ACTION_TOOLS:
+            sink.event("tool", {"name": str(tool), "args": a.get("args", {}),
+                                "result": {"error": "Tool aksi tidak dikenal, usulan diabaikan."}})
+            continue
+        try:
+            clean, label = tools.validate_action(tool, a.get("args", {}))
+        except tools.ActionError as e:
+            sink.event("tool", {"name": tool, "args": a.get("args", {}), "result": {"error": f"Usulan ditolak validasi: {e}"}})
+            continue
+        key = (tool, json.dumps({k: v for k, v in clean.items() if k not in ("reason", "description", "message")}, sort_keys=True))
+        if key in seen:
+            continue
+        seen.add(key)
+        sink.proposal(tool, clean, label)
+        sink.event("proposal", {"tool": tool, "label": label, "args": clean, "reason": a.get("alasan", "")})
+        labels.append(label)
+    return labels
 
 
 def investigate(alert, sink=None, client=None):
     """Menjalankan investigasi untuk satu anomali. Mengembalikan ringkasan dan statistik."""
     sink = sink or MemorySink()
-    client = client or _client()
-    cfg = types.GenerateContentConfig(
-        system_instruction=SYSTEM,
-        tools=[types.Tool(function_declarations=DECLARATIONS)],
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-    )
-    contents = [types.Content(role="user", parts=[types.Part(
-        text="Investigasi anomali berikut:\n" + json.dumps(alert, ensure_ascii=False, indent=1))])]
-    state = {"model": config.MODEL}
-    seen, tool_calls, verify_rounds, draft = set(), 0, 0, ""
-    sink.event("status", {"text": f"Mulai investigasi dengan {config.MODEL}."})
+    sink.event("status", {"text": "Mengumpulkan bukti otomatis sesuai jenis anomali."})
+    ev = evidence.gather(alert, sink)
+    calls, mode = 0, "ai"
+    try:
+        sink.event("status", {"text": "Menalar akar masalah dari bukti."})
+        result, model = _ask(alert, ev, sink, final=config.MAX_EXTRA_ROUNDS <= 0)
+        calls += 1
+        extra = [q for q in (result.get("query_tambahan") or []) if isinstance(q, dict) and q.get("sql")][:2]
+        if extra and config.MAX_EXTRA_ROUNDS > 0:
+            if result.get("rencana"):
+                sink.event("thought", {"text": "Rencana awal:\n" + "\n".join(f"- {r}" for r in result["rencana"])})
+            for i, q in enumerate(extra, 1):
+                sink.event("thought", {"text": f"Butuh data tambahan: {q.get('alasan', '')}"})
+                ev.run(f"extra{i}", q.get("alasan") or f"Query tambahan {i}", "run_sql_readonly", {"query": q["sql"]})
+            result, model = _ask(alert, ev, sink, final=True)
+            calls += 1
+    except llm.LLMUnavailable as e:
+        if not config.RULES_FALLBACK:
+            raise
+        sink.event("retry", {"text": f"{e} Beralih ke diagnosis berbasis aturan (tanpa AI)."})
+        result, model, mode = rules.diagnose(alert, ev), "aturan (tanpa AI)", "rules"
 
-    for step in range(1, config.MAX_STEPS + 1):
-        resp = _generate(client, contents, cfg, sink, state)
-        if not resp.candidates or not resp.candidates[0].content or not resp.candidates[0].content.parts:
-            reason = resp.candidates[0].finish_reason if resp.candidates else "tanpa kandidat"
-            raise RuntimeError(f"Gemini tidak mengembalikan jawaban ({reason}).")
-        content = resp.candidates[0].content
-        contents.append(content)  # disimpan utuh, termasuk thought signature yang dibutuhkan Gemini
-        calls = resp.function_calls or []
-        text = _visible_text(content)
+    if result.get("rencana"):
+        sink.event("thought", {"text": "Rencana dan penalaran:\n" + "\n".join(f"- {r}" for r in result["rencana"])})
+    result["sop"] = [s for s in result.get("sop", []) if s in ev.sop_files]
+    verification, bad = verify(result, ev)
 
-        if not calls:
-            verified, body = _split_verified(text)
-            if body:
-                draft = body
-            if verified or verify_rounds >= config.VERIFY_ROUNDS:
-                sink.event("final", {"verified": verified})
-                return {"summary": draft or "Agent berhenti tanpa ringkasan.", "verified": verified, "steps": step,
-                        "tool_calls": tool_calls, "model": state["model"]}
-            verify_rounds += 1
-            sink.event("draft", {"text": draft})
-            sink.event("verify", {"text": f"Verifikasi diri putaran {verify_rounds}: mencocokkan kesimpulan dengan bukti."})
-            contents.append(types.Content(role="user", parts=[types.Part(text=VERIFY_PROMPT)]))
-            continue
+    if bad and mode == "ai" and config.VERIFY_REPAIR:
+        sink.event("verify", {"text": f"Verifikasi kode: {len(bad)} klaim tidak didukung bukti. Meminta AI memperbaiki."})
+        sink.event("draft", {"text": json.dumps(bad, ensure_ascii=False, indent=1)})
+        try:
+            fixed, model = _ask(alert, ev, sink, final=True, repair=bad)
+            calls += 1
+            fixed["sop"] = [s for s in fixed.get("sop", []) if s in ev.sop_files]
+            fixed.setdefault("rencana", result.get("rencana"))
+            result = fixed
+            verification, bad = verify(result, ev)
+        except llm.LLMUnavailable as e:
+            sink.event("retry", {"text": f"Perbaikan dilewati: {e}"})
 
-        if text:
-            sink.event("thought", {"text": text})
-        responses = []
-        for call in calls:
-            tool_calls += 1
-            args = dict(call.args or {})
-            if call.name in tools.ACTION_TOOLS:
-                try:
-                    clean, label = tools.validate_action(call.name, args)
-                    key = _proposal_key(call.name, clean)
-                    if key in seen:
-                        out = {"status": "sudah diusulkan sebelumnya, tidak diduplikasi"}
-                    else:
-                        seen.add(key)
-                        pid = sink.proposal(call.name, clean, label)
-                        out = {"status": "diusulkan, menunggu persetujuan manusia", "proposal_id": pid}
-                        sink.event("proposal", {"tool": call.name, "label": label, "args": clean})
-                except tools.ActionError as e:
-                    out = {"error": f"Usulan ditolak validasi: {e}"}
-                    sink.event("tool", {"name": call.name, "args": args, "result": out})
-            elif call.name in tools.READ_TOOLS:
-                try:
-                    out = {"result": tools.READ_TOOLS[call.name](**args)}
-                except Exception as e:  # dikembalikan ke agent supaya bisa memperbaiki sendiri
-                    out = {"error": str(e)}
-                sink.event("tool", {"name": call.name, "args": args, "result": out})
-            else:
-                out = {"error": f"Tool {call.name} tidak tersedia."}
-                sink.event("tool", {"name": call.name, "args": args, "result": out})
-            responses.append(types.Part.from_function_response(name=call.name, response=out))
-        contents.append(types.Content(role="user", parts=responses))
-
-    sink.event("final", {"verified": False})
-    return {"summary": (draft + "\n\n" if draft else "") + "(Batas langkah investigasi tercapai sebelum agent selesai.)",
-            "verified": False, "steps": config.MAX_STEPS, "tool_calls": tool_calls, "model": state["model"]}
+    labels = _proposals(result, sink)
+    verified = verification["claims"] > 0 and not bad
+    sink.event("verify", {"text": f"Verifikasi kode: {verification['claims'] - verification['unsupported']} dari "
+                                  f"{verification['claims']} klaim didukung bukti, {verification['numbers_checked']} angka dicek."})
+    sink.event("final", {"verified": verified})
+    note = ("Semua model AI sedang tidak bisa dipakai, jadi diagnosis memakai aturan (tanpa AI)." if mode == "rules" else "")
+    return {"summary": _summary(result, labels, verification, note), "verified": verified, "steps": calls,
+            "tool_calls": ev.tool_calls, "model": model, "mode": mode}

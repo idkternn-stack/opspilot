@@ -6,8 +6,8 @@ if not exist .env (
   pause
   exit /b
 )
-findstr /b "GEMINI_API_KEY=" .env >nul || (
-  echo File .env belum berisi GEMINI_API_KEY. Tambahkan baris:  GEMINI_API_KEY=key_kamu
+findstr /b "GEMINI_API_KEY= GROQ_API_KEY=" .env >nul || (
+  echo File .env belum berisi GEMINI_API_KEY atau GROQ_API_KEY. Tambahkan baris:  GEMINI_API_KEY=key_kamu
   pause
   exit /b
 )

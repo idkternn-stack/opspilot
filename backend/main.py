@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, scenarios, simulate, store, tools
+from . import config, db, llm, scenarios, simulate, store, tools
 from .engine import Engine
 
 engine = Engine()
@@ -45,6 +45,7 @@ class AutopilotIn(BaseModel):
 
 class ResearchIn(BaseModel):
     company: str
+    refresh: bool = False
 
 
 class SimulateIn(BaseModel):
@@ -53,7 +54,7 @@ class SimulateIn(BaseModel):
 
 @app.get("/api/state")
 def state():
-    return {"model": config.MODEL, "fallback_model": config.FALLBACK_MODEL, "autopilot": engine.status(),
+    return {"model": config.MODEL, "fallback_model": config.FALLBACK_MODEL, "llm": llm.status(), "autopilot": engine.status(),
             "alerts": store.list_alerts(), "runs": store.list_runs(15), "research": store.list_research(10)}
 
 
@@ -111,7 +112,8 @@ def decide(body: DecisionIn):
 @app.post("/api/research")
 def start_research(body: ResearchIn):
     try:
-        return {"research_id": engine.enqueue_research(body.company)}
+        rid, cached = engine.enqueue_research(body.company, refresh=body.refresh)
+        return {"research_id": rid, "cached": cached}
     except ValueError as e:
         raise HTTPException(400, str(e))
 

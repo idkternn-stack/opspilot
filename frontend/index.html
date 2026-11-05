@@ -132,7 +132,7 @@ async function refreshState() {
   $('#autopilot').checked = ap.enabled;
   const mins = Math.round(ap.interval_s / 60);
   $('#apText').innerHTML = (ap.enabled ? `Aktif: memantau data tiap ${mins} menit dan menginvestigasi anomali baru otomatis.` : 'Nonaktif: investigasi hanya berjalan saat kamu menekan tombol.')
-    + ` Cek terakhir ${time(ap.last_check)}. Model ${esc(st.model)}${st.fallback_model ? `, cadangan ${esc(st.fallback_model)}` : ''}.`
+    + ` Cek terakhir ${time(ap.last_check)}. AI: ${esc((st.llm || []).filter(p => p.configured).map(p => `${p.provider} (${p.models.join(', ')}; maks ${p.rpm}/menit)`).join(' → ') || 'belum ada API key')}.`
     + (ap.current_run ? ' <span class="spinner"></span>Agent sedang bekerja.' : '');
   renderAlerts(st.alerts);
   renderHistory(st.runs);
@@ -177,7 +177,7 @@ function renderAlerts(list) {
 function renderHistory(runs) {
   $('#history').innerHTML = runs.length ? runs.map(r => {
     const res = r.status === 'done' ? (r.verified ? 'Terverifikasi' : 'Selesai') : (RUNSTATUS[r.status] || [r.status])[0];
-    return `<tr class="click" data-id="${esc(r.id)}"><td>${time(r.created_at)}</td><td>${esc(r.title || r.alert_id)}${r.mode === 'replay' ? ' <span class="pill busy">rekaman</span>' : ''}</td><td>${esc(TRIGGER[r.trigger] || r.trigger)}</td><td>${esc(res)}${r.duration_s ? `<div class="small">${r.duration_s} dtk, ${r.steps ?? '-'} langkah</div>` : ''}</td></tr>`;
+    return `<tr class="click" data-id="${esc(r.id)}"><td>${time(r.created_at)}</td><td>${esc(r.title || r.alert_id)}${r.mode === 'replay' ? ' <span class="pill busy">rekaman</span>' : ''}</td><td>${esc(TRIGGER[r.trigger] || r.trigger)}</td><td>${esc(res)}${r.duration_s ? `<div class="small">${r.duration_s} dtk, ${r.steps ?? '-'} panggilan AI</div>` : ''}</td></tr>`;
   }).join('') : '<tr><td colspan="4" class="small">Belum ada investigasi.</td></tr>';
   document.querySelectorAll('#history tr.click').forEach(tr => tr.onclick = () => selectRun(tr.dataset.id, true));
 }
@@ -223,12 +223,12 @@ function md(text) {
 function eventHtml(e) {
   const d = e.data;
   switch (e.kind) {
-    case 'tool': return `<li class="tool"><span class="tl-name">${esc(d.name)}</span><details><summary>input dan hasil</summary><pre>${js(d.args)}</pre><pre>${js(d.result)}</pre></details></li>`;
+    case 'tool': return `<li class="tool"><span class="tl-name">${d.evidence_id ? esc(d.evidence_id) + ' · ' : ''}${esc(d.name)}</span>${d.title ? ' ' + esc(d.title) : ''}<details><summary>input dan hasil</summary><pre>${js(d.args)}</pre><pre>${js(d.result)}</pre></details></li>`;
     case 'thought': return `<li class="thought">${esc(d.text)}</li>`;
     case 'proposal': return `<li class="proposal"><span class="tl-name">Mengusulkan:</span> ${esc(d.label)}</li>`;
-    case 'verify': return `<li class="verify"><span class="tl-name">Verifikasi diri.</span> ${esc(d.text)}</li>`;
+    case 'verify': return `<li class="verify"><span class="tl-name">Verifikasi.</span> ${esc(d.text)}</li>`;
     case 'draft': return `<li class="status"><details><summary>Draf ringkasan sebelum verifikasi</summary><pre>${esc(d.text)}</pre></details></li>`;
-    case 'final': return `<li class="${d.verified ? 'verify' : 'status'}">${d.verified ? 'Kesimpulan lolos verifikasi diri.' : 'Agent selesai tanpa konfirmasi verifikasi.'}</li>`;
+    case 'final': return `<li class="${d.verified ? 'verify' : 'status'}">${d.verified ? 'Kesimpulan lolos verifikasi: semua klaim didukung bukti.' : 'Sebagian klaim belum didukung bukti; periksa sebelum menyetujui.'}</li>`;
     case 'decision': return `<li class="status">Keputusan manusia: ${esc(d.label)} (${esc(d.status)})</li>`;
     case 'search': return `<li class="tool"><span class="tl-name">Google Search.</span> ${esc(d.text)}</li>`;
     case 'error': return `<li class="error">${esc(d.text)}</li>`;
@@ -250,7 +250,8 @@ function renderRun() {
   const active = r.status === 'queued' || r.status === 'running';
   const verified = r.status === 'done' ? (r.verified ? pill(['Terverifikasi','ok']) : pill(['Belum terverifikasi','warn'])) : '';
   let h = `<div class="card"><div class="row"><b>${esc(r.alert ? r.alert.title : r.alert_id)}</b><span>${r.mode === 'replay' ? pill(['Rekaman','busy']) : pill(['Langsung',''])} ${pill(RUNSTATUS[r.status] || [r.status,''])} ${verified}</span></div>
-    <div class="small" style="margin-top:4px">Pemicu: ${esc(TRIGGER[r.trigger] || r.trigger)} · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik · ${r.steps} langkah · ${r.tool_calls} panggilan tool` : ''}</div></div>`;
+    <div class="small" style="margin-top:4px">Pemicu: ${esc(TRIGGER[r.trigger] || r.trigger)} · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik · ${r.steps} panggilan AI · ${r.tool_calls} panggilan tool` : ''}</div></div>`;
+  if ((r.model || '').startsWith('aturan')) h += '<div class="banner replay">Mode tanpa AI: semua model AI sedang tidak bisa dipakai (kuota habis atau sibuk), jadi diagnosis memakai aturan berbasis bukti. Jalankan ulang investigasi saat kuota tersedia untuk penalaran AI.</div>';
   const sim = r.alert && r.alert.detail && r.alert.detail.simulation;
   if (sim) h += `<div class="banner replay">Simulasi pola kasus ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Ini data toko demo, bukan data internal perusahaan.</div>`;
   if (r.mode === 'replay') h += '<div class="banner replay">Ini rekaman investigasi sebelumnya, bukan investigasi langsung. Usulan tindakan tetap divalidasi terhadap data saat ini.</div>';
@@ -330,7 +331,7 @@ function renderResearch() {
   const active = r.status === 'queued' || r.status === 'running';
   const name = res && res.company.name ? res.company.name : r.company;
   let h = `<div class="card"><div class="row"><b>Riset: ${esc(name)}</b><span>${pill(['Sumber publik',''])} ${pill(RUNSTATUS[r.status] || [r.status,''])}</span></div>
-    <div class="small" style="margin-top:4px">Dicari "${esc(r.company)}" · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik` : ''}${res && (res.company.country || res.company.sector) ? ' · ' + esc([res.company.country, res.company.sector].filter(Boolean).join(', ')) : ''}</div></div>`;
+    <div class="small" style="margin-top:4px">${r.status === 'done' ? `<button class="ghost" style="float:right;margin-left:8px" onclick="refreshResearch('${esc(r.company)}')">Cari ulang</button>` : ''}Dicari "${esc(r.company)}" · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik` : ''}${res && (res.company.country || res.company.sector) ? ' · ' + esc([res.company.country, res.company.sector].filter(Boolean).join(', ')) : ''}</div></div>`;
   if (active) h += `<p class="small"><span class="spinner"></span>${r.status === 'queued' ? 'Menunggu giliran…' : 'Mencari berita, memverifikasi sumber, dan menganalisis dampak…'}</p>`;
   if (r.status === 'error') h += `<div class="banner err">${esc(r.error)}</div>`;
   if (res) {
@@ -353,11 +354,20 @@ async function simulateIssue(rid, issueId, btn) {
   } catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Simulasikan di OpsPilot'; }
 }
 
+async function refreshResearch(company) {
+  try { const r = await api('/api/research', {company, refresh: true}); await selectResearch(r.research_id); refreshState(); }
+  catch (e) { toast(e.message); }
+}
+
 $('#researchForm').onsubmit = async e => {
   e.preventDefault();
   const name = $('#company').value.trim(); if (!name) return;
   const btn = $('#btnResearch'); btn.disabled = true;
-  try { const r = await api('/api/research', {company: name}); $('#company').value = ''; await selectResearch(r.research_id); refreshState(); }
+  try {
+    const r = await api('/api/research', {company: name}); $('#company').value = '';
+    if (r.cached) toast('Hasil riset kurang dari 24 jam lalu dipakai ulang supaya hemat kuota. Klik "Cari ulang" untuk mencari lagi.');
+    await selectResearch(r.research_id); refreshState();
+  }
   catch (err) { toast(err.message); }
   btn.disabled = false;
 };

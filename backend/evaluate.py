@@ -50,7 +50,7 @@ def run_one(sid, workdir):
         row.update(passed=False, error=str(e), duration_s=round(time.time() - started, 1))
         return row
     row.update(duration_s=round(time.time() - started, 1), steps=result["steps"], tool_calls=result["tool_calls"],
-               verified=bool(result["verified"]), model=result["model"],
+               verified=bool(result["verified"]), model=result["model"], mode=result.get("mode", "ai"),
                proposals=[p["label"] for p in sink.proposals], summary=result["summary"])
     row.update(grade(sc, result["summary"], sink.proposals))
     return row
@@ -79,15 +79,19 @@ def to_markdown(summary, rows, model, stamp):
            f"| Tindakan tepat | {summary['action_accuracy']}% |",
            f"| Tanpa tindakan terlarang | {summary['safety_rate']}% |",
            f"| Lulus semua kriteria | {summary['pass_rate']}% |",
-           f"| Lolos verifikasi diri | {summary['verified_rate']}% |",
+           f"| Lolos verifikasi bukti | {summary['verified_rate']}% |",
            f"| Rata-rata waktu investigasi | {summary['avg_duration_s']} detik |",
-           f"| Rata-rata langkah / panggilan tool | {summary['avg_steps']} / {summary['avg_tool_calls']} |",
-           "", "| Skenario | Terdeteksi | Diagnosis | Aksi | Aman | Lulus | Waktu (dtk) | Langkah |",
+           f"| Rata-rata panggilan AI / panggilan tool | {summary['avg_steps']} / {summary['avg_tool_calls']} |",
+           "", "| Skenario | Terdeteksi | Diagnosis | Aksi | Aman | Lulus | Waktu (dtk) | Panggilan AI |",
            "|---|---|---|---|---|---|---|---|"]
     for r in rows:
         out.append(f"| {r['scenario']} | {yn(r.get('detected'))} | {yn(r.get('diagnosis_correct'))} | "
                    f"{yn(r.get('action_correct'))} | {yn(r.get('safe'))} | {yn(r.get('passed'))} | "
                    f"{r.get('duration_s', '-')} | {r.get('steps', '-')} |")
+    rules_rows = [r["scenario"] for r in rows if r.get("mode") == "rules"]
+    if rules_rows:
+        out += ["", f"Catatan: {len(rules_rows)} skenario memakai diagnosis berbasis aturan karena kuota AI habis "
+                    f"({', '.join(rules_rows)}). Jalankan ulang evaluasi saat kuota tersedia untuk angka AI murni."]
     errors = [r for r in rows if r.get("error")]
     if errors:
         out += ["", "Catatan error:"] + [f"- {r['scenario']}: {r['error']}" for r in errors]
@@ -104,8 +108,8 @@ def main():
     unknown = [i for i in ids if i not in scenarios.SCENARIOS]
     if unknown:
         raise SystemExit(f"Skenario tidak dikenal: {', '.join(unknown)}")
-    if not os.environ.get("GEMINI_API_KEY"):
-        raise SystemExit("GEMINI_API_KEY belum diatur. Isi file .env terlebih dahulu.")
+    if not (config.GEMINI_API_KEY or config.GROQ_API_KEY):
+        raise SystemExit("Belum ada API key. Isi GEMINI_API_KEY atau GROQ_API_KEY di file .env.")
 
     workdir = os.path.join(config.EVAL_DIR, "tmp")
     results_dir = os.path.join(config.EVAL_DIR, "results")

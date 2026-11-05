@@ -2,15 +2,17 @@
 
 **AI agent otonom untuk investigasi anomali operasional retail.** GTNIC 2026, sub tema Enterprise Productivity.
 
-OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, agent berbasis **Gemini** menyusun rencana, menelusuri bukti lewat SQL, merujuk SOP perusahaan lewat RAG, menghitung dampak finansial, lalu mengusulkan tindakan yang benar-benar mengubah data (transfer stok, hentikan promo, tiket, notifikasi). Sebelum menutup, agent memverifikasi kesimpulannya sendiri. Tidak ada tindakan yang dijalankan tanpa persetujuan manusia.
+OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot mengumpulkan bukti lewat tool (SQL read-only, estimasi kerugian, RAG atas SOP), lalu AI (**Gemini**, dengan **Groq** sebagai cadangan opsional) menalar akar masalah dan mengusulkan tindakan yang benar-benar mengubah data (transfer stok, hentikan promo, tiket, notifikasi). Setiap angka dalam kesimpulan AI diverifikasi kode terhadap bukti. Desainnya hemat kuota: 1-2 panggilan AI per investigasi, sehingga tetap jalan di API gratis. Tidak ada tindakan yang dijalankan tanpa persetujuan manusia.
 
 ## Fitur utama
 
 | Fitur | Penjelasan |
 |---|---|
 | Autopilot | Monitor latar belakang mendeteksi anomali tiap 2 menit dan langsung mengantrekan investigasi, tanpa perlu diklik |
-| Investigasi multi-langkah | Agent merencanakan, memanggil tool, membaca hasil, memperbaiki query yang error, lalu menyimpulkan |
-| Verifikasi diri | Ringkasan dicek ulang terhadap hasil tool; agent kembali menginvestigasi bila ada klaim tanpa bukti |
+| Investigasi hemat kuota | Bukti dikumpulkan otomatis lewat tool (SQL, estimasi kerugian, RAG SOP); AI menalar dalam 1-2 panggilan dan boleh meminta query tambahan |
+| Verifikasi berbasis kode | Setiap angka di klaim AI dicocokkan dengan bukti yang dirujuk; bila tidak cocok, AI diminta memperbaiki satu kali |
+| Multi-penyedia AI | Gemini (utama) dan Groq (cadangan opsional), pembatas permintaan per menit, pindah otomatis saat kuota habis |
+| Mode tanpa AI | Bila semua model AI habis kuota, diagnosis berbasis aturan tetap berjalan dengan label jelas |
 | Aksi nyata dengan persetujuan | `transfer_stock` dan `pause_promo` mengubah database setelah disetujui, lalu hasilnya diverifikasi |
 | Progres langsung | Setiap langkah agent tampil di UI saat terjadi |
 | Jejak audit | Semua investigasi, langkah, usulan, dan keputusan tersimpan di database terpisah |
@@ -28,7 +30,9 @@ flowchart LR
   UI <--> API[FastAPI]
   D --> Q[Antrean investigasi]
   API --> Q
-  Q --> A[Agent Gemini<br/>rencana, tool, verifikasi diri]
+  Q --> EV[Pengumpul bukti otomatis<br/>SQL, estimasi, RAG SOP]
+  EV --> A[Penalaran AI 1-2 panggilan<br/>Gemini, cadangan Groq]
+  A --> VC[Verifikasi kode<br/>angka vs bukti]
   A -->|run_sql_readonly| DB[(Data toko<br/>SQLite read-only)]
   A -->|search_sop| R[RAG TF-IDF atas SOP]
   A -->|estimate_loss| DB
@@ -42,7 +46,7 @@ flowchart LR
 
 | Komponen | Teknologi |
 |---|---|
-| LLM | Gemini via Google GenAI SDK, function calling manual, model cadangan otomatis |
+| LLM | Gemini (Google GenAI SDK) + Groq opsional (OpenAI-compatible API), keluaran JSON terstruktur, pembatas per menit, fallback otomatis |
 | Backend | Python, FastAPI, thread worker dan monitor |
 | Data | SQLite: data toko sintetis 30 hari (4 toko, 8 produk) + database audit terpisah |
 | RAG | TF-IDF (scikit-learn) atas 6 dokumen SOP di `data/sop` |
@@ -80,7 +84,7 @@ Data toko demo dimulai **bersih tanpa anomali**. Alur demo: riset perusahaan nya
 - Usulan ganda otomatis digabung.
 - Semua aksi menunggu persetujuan manusia; hasil eksekusi dicek ulang dari database.
 - Agent hanya boleh memakai fakta dari hasil tool, dan wajib lolos verifikasi diri.
-- Gemini sibuk (429/500/503/504): coba ulang otomatis, pindah ke model cadangan, atau putar rekaman berlabel.
+- Kuota AI: 1-2 panggilan per investigasi, pembatas permintaan per menit, cache riset 24 jam, pindah ke model/penyedia cadangan, lalu mode tanpa AI berlabel atau rekaman.
 - API key disimpan di `.env` dan tidak masuk repository.
 
 ## Menjalankan secara lokal (Windows)
@@ -90,7 +94,9 @@ Data toko demo dimulai **bersih tanpa anomali**. Alur demo: riset perusahaan nya
    ```
    GEMINI_API_KEY=key_kamu
    GEMINI_FALLBACK_MODEL=gemini-3.5-flash
+   GROQ_API_KEY=key_groq_kamu   (opsional, cadangan bila kuota Gemini habis)
    ```
+   Cek key dengan `cek_key.bat`.
 3. Klik dua kali `start.bat`. Browser terbuka otomatis ke http://127.0.0.1:7860.
 4. Ketik nama perusahaan di **Riset perusahaan nyata**, lalu klik **Simulasikan di OpsPilot** pada temuan yang ingin diselesaikan.
 
@@ -129,7 +135,10 @@ Hasil evaluasi tersimpan di `eval/results/` dalam format Markdown dan JSON.
 
 ```
 backend/
-  agent.py      loop agent Gemini dan verifikasi diri
+  llm.py        Gemini + Groq, pembatas kecepatan, fallback
+  evidence.py   pengumpulan bukti otomatis per jenis anomali
+  agent.py      penalaran AI + verifikasi berbasis kode
+  rules.py      diagnosis berbasis aturan (mode tanpa AI)
   tools.py      tool baca, tool aksi, validasi
   detect.py     detektor anomali
   scenarios.py  data sintetis dan skenario

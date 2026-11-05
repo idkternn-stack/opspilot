@@ -296,3 +296,13 @@ def set_issue_simulated(rid, issue_id, info):
 def mark_stale_research():
     for r in _read("SELECT id FROM research WHERE status IN ('queued','running')"):
         update_research(r["id"], status="error", error="Server berhenti sebelum riset selesai.", finished_at=_now())
+
+
+def find_cached_research(company, hours):
+    """Riset sukses untuk nama perusahaan yang sama dalam `hours` jam terakhir."""
+    if hours <= 0:
+        return None
+    since = (dt.datetime.now() - dt.timedelta(hours=hours)).isoformat(timespec="seconds")
+    rows = _read("SELECT id FROM research WHERE lower(company) = lower(?) AND status = 'done' AND created_at >= ? "
+                 "ORDER BY created_at DESC LIMIT 1", (company, since))
+    return rows[0]["id"] if rows else None

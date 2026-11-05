@@ -1,14 +1,20 @@
-"""Tes cepat key Gemini di .env tanpa menjalankan OpsPilot."""
-import os
-from dotenv import load_dotenv
-from google import genai
+"""Tes cepat API key di .env (Gemini dan Groq) tanpa menjalankan OpsPilot."""
+from backend import config, llm
 
-load_dotenv(override=True)
-key = os.environ.get("GEMINI_API_KEY", "")
-print(f"Key terbaca: {len(key)} karakter, berakhiran ...{key[-4:]}")
-model = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
-try:
-    r = genai.Client(api_key=key).models.generate_content(model=model, contents="Balas satu kata: ok")
-    print(f"BERHASIL dengan {model}: {(r.text or '').strip()[:20]}")
-except Exception as e:
-    print(f"GAGAL dengan {model}: {e}")
+for name in config.LLM_ORDER:
+    p = llm.PROVIDERS.get(name)
+    if not p:
+        continue
+    key = config.GEMINI_API_KEY if name == "gemini" else config.GROQ_API_KEY
+    if not p.configured():
+        print(f"{name}: belum diisi di .env")
+        continue
+    print(f"{name}: key {len(key)} karakter, berakhiran ...{key[-4:]}")
+    for model in p.models():
+        try:
+            out = p.complete_json(model, "Balas hanya JSON.", 'Balas JSON {"status": "ok"}')
+            print(f"  BERHASIL {model}: {out}")
+        except llm.Skip as s:
+            print(f"  LEWATI  {model}: {s.reason}")
+        except Exception as e:
+            print(f"  GAGAL   {model}: {e}")

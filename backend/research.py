@@ -12,9 +12,8 @@ import datetime as dt
 import json
 import re
 
-from google.genai import types
-
-from . import agent, config, tools
+from . import llm, tools
+from .agent import MemorySink
 
 CATEGORIES = {
     "stok_pasokan": "Stok & pasokan", "distribusi": "Distribusi & pengiriman", "harga_promo": "Harga & promo",
@@ -191,15 +190,8 @@ def verify(issues, today=None):
     return kept, dropped
 
 
-def _json(text):
-    text = (text or "").strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", text, re.S)
-        if not m:
-            raise ValueError("Analisis tidak mengembalikan JSON.")
-        return json.loads(m.group(0))
+CATEGORY_SCENARIO = {"stok_pasokan": "stockout_delay", "distribusi": "supplier_delay", "harga_promo": "wrong_discount",
+                     "sistem_data": "data_gap", "permintaan": "demand_spike", "penutupan_toko": "store_closure"}
 
 
 def _sops_for(issues):
@@ -211,16 +203,28 @@ def _sops_for(issues):
     return docs
 
 
-def analyze(client, company, issues, sink, state):
+def _fallback_analysis(issues, docs):
+    """Dipakai bila semua model AI tidak bisa dipakai: skenario dipilih dari kategori temuan."""
+    for issue in issues:
+        sc = CATEGORY_SCENARIO.get(issue["category"], "none")
+        issue.update(scenario=sc, scenario_label=SCENARIO_LABELS[sc],
+                     scenario_reason="Dipilih dari kategori temuan (analisis AI tidak tersedia).",
+                     sop=sorted(docs)[:1] if sc != "none" else [])
+
+
+def analyze(company, issues, sink):
     docs = _sops_for(issues)
     findings = json.dumps([{"nomor": i["id"], "judul": i["title"], "tanggal": i["date"], "kategori": i["category_label"],
                             "ringkasan": i["summary"]} for i in issues], ensure_ascii=False, indent=1)
     sops = "\n\n".join(f"[{name}]\n{text}" for name, text in docs.items()) or "(tidak ada)"
     prompt = ANALYSIS_PROMPT.format(company=company, findings=findings, sops=sops,
                                     scenarios=", ".join(SCENARIO_LABELS))
-    cfg = types.GenerateContentConfig(system_instruction=ANALYSIS_SYSTEM, response_mime_type="application/json")
-    resp = agent._generate(client, [types.Content(role="user", parts=[types.Part(text=prompt)])], cfg, sink, state)
-    data = _json(agent._visible_text(resp.candidates[0].content))
+    try:
+        data, model = llm.complete_json(ANALYSIS_SYSTEM, prompt, sink, purpose="analisis riset")
+    except llm.LLMUnavailable as e:
+        sink.event("retry", {"text": f"{e} Temuan tetap ditampilkan; skenario dipilih dari kategori."})
+        _fallback_analysis(issues, docs)
+        return "Analisis dampak AI tidak tersedia saat ini. Temuan dan sumber tetap valid.", sorted(docs), None
     by_no = {int(t.get("nomor", 0)): t for t in data.get("temuan", []) if str(t.get("nomor", "")).isdigit()}
     for issue in issues:
         a = by_no.get(issue["id"], {})
@@ -233,26 +237,17 @@ def analyze(client, company, issues, sink, state):
             scenario=scenario, scenario_label=SCENARIO_LABELS[scenario],
             scenario_reason=str(a.get("alasan_skenario", "")).strip(),
         )
-    return str(data.get("ringkasan", "")).strip(), sorted(docs)
+    return str(data.get("ringkasan", "")).strip(), sorted(docs), model
 
 
-def research_company(company, sink=None, client=None, today=None):
-    sink = sink or agent.MemorySink()
+def research_company(company, sink=None, today=None):
+    sink = sink or MemorySink()
     company = clean_company(company)
     today = today or dt.date.today()
-    client = client or agent._client()
-    state = {"model": config.MODEL}
 
     sink.event("status", {"text": f"Mencari berita terbaru tentang {company} lewat Google Search."})
-    cfg = types.GenerateContentConfig(system_instruction=SEARCH_SYSTEM,
-                                      tools=[types.Tool(google_search=types.GoogleSearch())])
     prompt = SEARCH_PROMPT.format(today=today.isoformat(), company=company, categories=", ".join(CATEGORIES))
-    resp = agent._generate(client, [types.Content(role="user", parts=[types.Part(text=prompt)])], cfg, sink, state)
-    if not resp.candidates or not resp.candidates[0].content:
-        raise RuntimeError("Gemini tidak mengembalikan hasil pencarian.")
-    cand = resp.candidates[0]
-    text = agent._visible_text(cand.content)
-    grounding = cand.grounding_metadata
+    (text, grounding), search_model = llm.search_grounded(SEARCH_SYSTEM, prompt, sink)
     queries = list(getattr(grounding, "web_search_queries", None) or []) if grounding else []
     if queries:
         sink.event("search", {"text": "Kata kunci pencarian: " + "; ".join(queries), "queries": queries})
@@ -263,13 +258,11 @@ def research_company(company, sink=None, client=None, today=None):
     sink.event("sourcecheck", {"text": f"Verifikasi sumber: {len(raw)} temuan dari pencarian, {len(issues)} lolos verifikasi sumber"
                                   + (f", {len(dropped)} dibuang karena tidak punya sumber." if dropped else ".")})
 
-    overall, sop_used = "", []
+    overall, sop_used, analysis_model = "", [], None
     if issues:
         sink.event("status", {"text": "Menganalisis dampak operasional dan mencocokkan dengan SOP."})
         try:
-            overall, sop_used = analyze(client, profile["name"] or company, issues, sink, state)
-        except agent.AgentBusyError:
-            raise
+            overall, sop_used, analysis_model = analyze(profile["name"] or company, issues, sink)
         except Exception as e:
             sink.event("error", {"text": f"Analisis dampak gagal: {e}. Temuan tetap ditampilkan."})
     elif found:
@@ -278,6 +271,7 @@ def research_company(company, sink=None, client=None, today=None):
         overall = "Perusahaan tidak ditemukan di hasil pencarian. OpsPilot tidak membuat temuan tanpa sumber."
 
     sink.event("status", {"text": f"Riset selesai: {len(issues)} masalah terverifikasi."})
+    model = search_model + (f" + {analysis_model}" if analysis_model and analysis_model != search_model else "")
     return {"company_input": company, "company": profile, "found": found or bool(issues), "issues": issues,
             "dropped": dropped, "search_queries": queries, "overall": overall, "sop_used": sop_used,
-            "model": state["model"], "searched_at": dt.datetime.now().isoformat(timespec="seconds")}
+            "model": model, "searched_at": dt.datetime.now().isoformat(timespec="seconds")}
