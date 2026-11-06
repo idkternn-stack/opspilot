@@ -1,0 +1,236 @@
+{
+ "alert_id": "disc:1:7",
+ "alert_title": "Diskon tidak wajar: Lipstik Matte di Shopee Jakarta Center (simulasi kasus Shopee)",
+ "recorded_at": "2026-11-06T11:56:28",
+ "model": "groq/openai/gpt-oss-120b",
+ "summary": "**Akar masalah:** Promo diskon 40% diterapkan tanpa persetujuan, sehingga harga jual di bawah biaya produksi.\n**Bukti:**\n- Discount aktif 0.4 (40%) pada produk Lipstik Matte di toko Shopee Jakarta Center [E2]\n- Harga jual produk 120000 dan cost 80000 [E1]\n- Kerugian per hari karena menjual di bawah cost sebesar 192000 [E4]\n- SOP menyatakan diskon >25% wajib persetujuan dan harus dihentikan bila harga jual < cost [E5]\n**SOP dirujuk:** sop_pricing.md\n**Dampak:** Kerugian estimasi 192000 per hari akibat penjualan di bawah cost (E4).\n**Tindakan diusulkan:**\n- Hentikan promo 40% untuk Lipstik Matte di Shopee Jakarta Center\n- Buat tiket HIGH: Promo Diskon >25% tanpa persetujuan, jualan di bawah cost\n**Verifikasi kode:** 4 dari 4 klaim didukung bukti (6 angka dicek).",
+ "verified": true,
+ "steps": 1,
+ "tool_calls": 5,
+ "duration_s": 4.1,
+ "events": [
+  {
+   "kind": "status",
+   "data": {
+    "text": "Mengumpulkan bukti otomatis sesuai jenis anomali."
+   }
+  },
+  {
+   "kind": "tool",
+   "data": {
+    "name": "run_sql_readonly",
+    "args": {
+     "query": "SELECT id AS product_id, name, price, cost FROM products WHERE id = 7"
+    },
+    "result": {
+     "result": [
+      {
+       "product_id": 7,
+       "name": "Lipstik Matte",
+       "price": 120000.0,
+       "cost": 80000.0
+      }
+     ]
+    },
+    "evidence_id": "E1",
+    "title": "Harga jual dan harga pokok Lipstik Matte"
+   }
+  },
+  {
+   "kind": "tool",
+   "data": {
+    "name": "run_sql_readonly",
+    "args": {
+     "query": "SELECT store_id, product_id, discount, active, start_date FROM promotions WHERE store_id = 1 AND product_id = 7"
+    },
+    "result": {
+     "result": [
+      {
+       "store_id": 1,
+       "product_id": 7,
+       "discount": 0.4,
+       "active": 1,
+       "start_date": "2026-11-03"
+      }
+     ]
+    },
+    "evidence_id": "E2",
+    "title": "Promo Lipstik Matte di Shopee Jakarta Center"
+   }
+  },
+  {
+   "kind": "tool",
+   "data": {
+    "name": "run_sql_readonly",
+    "args": {
+     "query": "SELECT date, qty, discount FROM sales WHERE store_id = 1 AND product_id = 7 AND date >= '2026-10-30' ORDER BY date"
+    },
+    "result": {
+     "result": [
+      {
+       "date": "2026-10-30",
+       "qty": 24,
+       "discount": 0.0
+      },
+      {
+       "date": "2026-10-31",
+       "qty": 23,
+       "discount": 0.0
+      },
+      {
+       "date": "2026-11-01",
+       "qty": 28,
+       "discount": 0.0
+      },
+      {
+       "date": "2026-11-02",
+       "qty": 22,
+       "discount": 0.0
+      },
+      {
+       "date": "2026-11-03",
+       "qty": 26,
+       "discount": 0.4
+      },
+      {
+       "date": "2026-11-04",
+       "qty": 24,
+       "discount": 0.4
+      },
+      {
+       "date": "2026-11-05",
+       "qty": 22,
+       "discount": 0.4
+      }
+     ]
+    },
+    "evidence_id": "E3",
+    "title": "Penjualan harian Lipstik Matte di Shopee Jakarta Center (7 hari)"
+   }
+  },
+  {
+   "kind": "tool",
+   "data": {
+    "name": "estimate_loss",
+    "args": {
+     "store_id": 1,
+     "product_id": 7
+    },
+    "result": {
+     "result": {
+      "store": "Shopee Jakarta Center",
+      "product": "Lipstik Matte",
+      "price": 120000.0,
+      "cost": 80000.0,
+      "recent_avg_qty_per_day": 24.0,
+      "baseline_avg_qty_per_day": 23.7,
+      "recent_avg_discount": 0.4,
+      "unit_margin_now": -8000,
+      "lost_revenue_per_day": 0,
+      "loss_from_selling_below_cost_per_day": 192000,
+      "discount_cost_per_day": 1152000,
+      "note": "lost_revenue_per_day = (qty baseline - qty terkini) x harga; loss_from_selling_below_cost_per_day = kerugian karena harga jual setelah diskon di bawah harga pokok."
+     }
+    },
+    "evidence_id": "E4",
+    "title": "Estimasi kerugian Lipstik Matte"
+   }
+  },
+  {
+   "kind": "tool",
+   "data": {
+    "name": "search_sop",
+    "args": {
+     "query": "diskon harga jual di bawah harga pokok hentikan promo",
+     "k": 2
+    },
+    "result": {
+     "result": [
+      {
+       "source": "sop_pricing.md",
+       "score": 0.559,
+       "text": "# SOP Kesalahan Harga dan Diskon\n1. Diskon di atas 25% wajib punya persetujuan Pricing Manager.\n2. Jika harga jual setelah diskon di bawah harga pokok (cost), hentikan promo segera (pause promo) dan buat tiket prioritas HIGH ke Pricing Team.\n3. Hitung estimasi kerugian per hari dan laporkan ke Finance.\n"
+      },
+      {
+       "source": "sop_toko_tutup.md",
+       "score": 0.096,
+       "text": "# SOP Penutupan Toko Terjadwal\n1. Penutupan toko terjadwal (renovasi, audit stok, libur khusus) tercatat di store_events.\n2. Penurunan pendapatan pada tanggal penutupan adalah hal yang diharapkan, bukan masalah operasional.\n3. Tidak perlu tindakan korektif seperti transfer stok atau perubahan harga. Cukup catat di ringkasan; notifikasi ke Regional Manager bersifat opsional.\n"
+      }
+     ]
+    },
+    "evidence_id": "E5",
+    "title": "Prosedur yang relevan (RAG atas SOP)"
+   }
+  },
+  {
+   "kind": "status",
+   "data": {
+    "text": "Menalar akar masalah dari bukti."
+   }
+  },
+  {
+   "kind": "thought",
+   "data": {
+    "text": "Rencana dan penalaran:\n- Identifikasi promo aktif dengan discount 0.4 (40%) pada Lipstik Matte di Shopee Jakarta Center (E2).\n- Bandingkan dengan baseline discount 0.0, menunjukkan anomali (E0).\n- Cek harga jual 120000 dan cost 80000 (E1); setelah diskon 40% harga jual menjadi 72000 < cost, menyebabkan kerugian per unit -8000 (E4).\n- SOP pricing menyatakan diskon >25% harus ada persetujuan dan promo harus dihentikan bila harga jual di bawah cost (E5).\n- Tidak ada bukti persetujuan, sehingga diperlukan tindakan pause promo dan eskalasi ke Pricing Team."
+   }
+  },
+  {
+   "kind": "proposal",
+   "data": {
+    "tool": "pause_promo",
+    "label": "Hentikan promo 40% untuk Lipstik Matte di Shopee Jakarta Center",
+    "args": {
+     "store_id": 1,
+     "product_id": 7,
+     "reason": "Diskon 40% tanpa persetujuan, harga jual di bawah cost (SOP Kesalahan Harga dan Diskon)."
+    },
+    "reason": "Sesuai SOP pricing, promo harus dihentikan."
+   }
+  },
+  {
+   "kind": "proposal",
+   "data": {
+    "tool": "create_ticket",
+    "label": "Buat tiket HIGH: Promo Diskon >25% tanpa persetujuan, jualan di bawah cost",
+    "args": {
+     "title": "Promo Diskon >25% tanpa persetujuan, jualan di bawah cost",
+     "priority": "HIGH",
+     "description": "Promo Diskon 40% pada Lipstik Matte (store_id=1, product_id=7) aktif sejak 2026-11-03 tanpa persetujuan Pricing Manager. Harga jual setelah diskon 72000 < cost 80000, menyebabkan kerugian ~192000 per hari (E4). Mohon tinjau dan beri persetujuan atau revisi promo."
+    },
+    "reason": "Eskalasi ke Pricing Team sesuai SOP."
+   }
+  },
+  {
+   "kind": "verify",
+   "data": {
+    "text": "Verifikasi kode: 4 dari 4 klaim didukung bukti, 6 angka dicek."
+   }
+  },
+  {
+   "kind": "final",
+   "data": {
+    "verified": true
+   }
+  }
+ ],
+ "proposals": [
+  {
+   "tool": "pause_promo",
+   "args": {
+    "store_id": 1,
+    "product_id": 7,
+    "reason": "Diskon 40% tanpa persetujuan, harga jual di bawah cost (SOP Kesalahan Harga dan Diskon)."
+   },
+   "label": "Hentikan promo 40% untuk Lipstik Matte di Shopee Jakarta Center"
+  },
+  {
+   "tool": "create_ticket",
+   "args": {
+    "title": "Promo Diskon >25% tanpa persetujuan, jualan di bawah cost",
+    "priority": "HIGH",
+    "description": "Promo Diskon 40% pada Lipstik Matte (store_id=1, product_id=7) aktif sejak 2026-11-03 tanpa persetujuan Pricing Manager. Harga jual setelah diskon 72000 < cost 80000, menyebabkan kerugian ~192000 per hari (E4). Mohon tinjau dan beri persetujuan atau revisi promo."
+   },
+   "label": "Buat tiket HIGH: Promo Diskon >25% tanpa persetujuan, jualan di bawah cost"
+  }
+ ]
+}
