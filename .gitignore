@@ -6,3 +6,4 @@ data/*.db-*
 eval/tmp/
 .venv/
 *.zip
+cloudflared.exe

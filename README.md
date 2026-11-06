@@ -179,6 +179,8 @@ tests/          tes offline dengan Gemini tiruan
 
 Repo ini sudah berisi `render.yaml` (Render) dan `Dockerfile` (Hugging Face Spaces, Railway, atau hosting Docker lain).
 
+**Link publik cepat dari laptop (Cloudflare Tunnel, tanpa akun):** jalankan `tunnel.bat`. Skrip ini mengunduh `cloudflared` resmi (sekali saja), menyalakan server, lalu menampilkan link `https://....trycloudflare.com`. Link hanya aktif selama laptop menyala dan kedua jendela terbuka, cocok untuk merekam demo.
+
 **Hugging Face Spaces (gratis, tanpa kartu kredit):**
 1. Di [huggingface.co](https://huggingface.co), klik **Spaces** → **New Space**. Isi nama `opspilot`, pilih SDK **Docker** → template **Blank**, hardware **CPU basic (free)**, visibility **Public**, lalu **Create Space**.
 2. Di tab **Files**, klik **Add file** → **Create a new file**, beri nama `Dockerfile`, tempel isi [`deploy/huggingface/Dockerfile`](deploy/huggingface/Dockerfile), lalu **Commit**.
