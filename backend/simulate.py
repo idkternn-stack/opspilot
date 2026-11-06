@@ -11,6 +11,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import re
 import threading
 
 from . import config, db, detect, scenarios, store
@@ -121,7 +122,42 @@ def _copy_db(src, dst):
         b.close()
 
 
-def inject(kind, note):
+def _match(name, options):
+    """Mencocokkan nama dari AI ke ID katalog (sama persis, mengandung, atau kata yang sama)."""
+    n = (name or "").strip().lower()
+    if not n:
+        return None
+    for i, opt in options:
+        if opt.lower() == n:
+            return i
+    for i, opt in options:
+        if n in opt.lower() or opt.lower() in n:
+            return i
+    words = set(re.findall(r"\w{3,}", n))
+    best = max(options, key=lambda o: len(words & set(re.findall(r"\w{3,}", o[1].lower()))), default=None)
+    if best and words & set(re.findall(r"\w{3,}", best[1].lower())):
+        return best[0]
+    return None
+
+
+def resolve_target(target, catalog):
+    target = target or {}
+    pid = _match(target.get("product"), [(p[0], p[1]) for p in catalog["products"]])
+    sid = _match(target.get("store"), [(s[0], s[1]) for s in catalog["stores"]])
+    return {"product": pid, "store": sid}
+
+
+def _order(cands, prefer):
+    if not prefer or not (prefer.get("product") or prefer.get("store")):
+        return cands
+    def score(c):
+        stores = c.get("stores") or [c.get("store")]
+        return (0 if prefer.get("product") and c.get("product") == prefer["product"] else 1,
+                0 if prefer.get("store") and prefer["store"] in stores else 1)
+    return sorted(cands, key=score)
+
+
+def inject(kind, note, prefer=None):
     """Mencari target yang menghasilkan anomali baru, lalu menerapkannya ke database demo."""
     if kind not in EXPECTED:
         raise SimulationError("Jenis masalah ini tidak bisa disimulasikan di data toko.")
@@ -136,7 +172,7 @@ def inject(kind, note):
     tmpdir = tempfile.mkdtemp(prefix="opspilot_sim_")
     try:
         trial = os.path.join(tmpdir, "trial.db")
-        for params in candidates(kind):
+        for params in _order(list(candidates(kind)), prefer):
             if kind in ("data_gap", "store_closure") and params["store"] in busy_stores:
                 continue  # jangan menumpuk dua masalah tingkat toko di gerai yang sama
             _copy_db(config.BUSINESS_DB_PATH, trial)
@@ -180,6 +216,8 @@ def simulate_issue(research_id, issue_id, engine):
             raise SimulationError("Temuan tidak ditemukan.")
         if issue.get("simulated"):
             return issue["simulated"]
+        if issue.get("relevant") is False:
+            raise SimulationError("Temuan ini bukan masalah operasional perusahaan, jadi tidak disimulasikan.")
         if issue.get("scenario", "none") == "none":
             raise SimulationError("Temuan ini tidak bisa disimulasikan di data toko.")
         company = rec["result"]["company"].get("name") or rec["company"]
@@ -192,13 +230,15 @@ def simulate_issue(research_id, issue_id, engine):
         switched = scenarios.current_catalog(config.BUSINESS_DB_PATH).get("key") != target["key"]
         if switched:
             switch_catalog(target, engine)
-        alerts, params = inject(issue["scenario"], f"simulasi kasus {company}")
+        prefer = resolve_target(issue.get("target"), target)
+        alerts, params = inject(issue["scenario"], f"simulasi kasus {company}", prefer)
         for a in alerts:
             a["title"] = f"{a['title']} (simulasi kasus {company})"
             a["detail"]["simulation"] = {
                 "company": company, "case": issue["title"], "case_date": issue["date"],
                 "case_category": issue["category_label"], "pattern": issue["scenario_label"],
                 "catalog": target["company"],
+                "target_product": (issue.get("target") or {}).get("product", ""),
                 "public_sources": [s["domain"] or s["title"] for s in issue["sources"]][:3],
                 "note": "Data demo dengan katalog simulasi (harga dan angka perkiraan), bukan data internal perusahaan.",
             }

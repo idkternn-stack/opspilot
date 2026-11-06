@@ -14,6 +14,7 @@ OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot m
 | Multi-penyedia AI | Gemini (utama) dan Groq (cadangan opsional), pembatas permintaan per menit, pindah otomatis saat kuota habis |
 | Mode tanpa AI | Bila semua model AI habis kuota, diagnosis berbasis aturan tetap berjalan dengan label jelas |
 | Aksi nyata dengan persetujuan | `transfer_stock` dan `pause_promo` mengubah database setelah disetujui, lalu hasilnya diverifikasi |
+| Usulan tindakan lengkap | Setiap usulan memuat alasan (merujuk ID bukti), 2-5 langkah penyelesaian, PIC, target waktu sesuai prioritas, dan kriteria masalah dianggap selesai |
 | Progres langsung | Setiap langkah agent tampil di UI saat terjadi |
 | Jejak audit | Semua investigasi, langkah, usulan, dan keputusan tersimpan di database terpisah |
 | Mode rekaman | Bila Gemini sedang sibuk saat demo, investigasi sebelumnya bisa diputar ulang dengan label jelas "rekaman" |
@@ -56,8 +57,8 @@ flowchart LR
 
 1. **Cari:** Gemini dengan Grounding with Google Search menulis temuan dalam format tetap (judul, tanggal, kategori, ringkasan).
 2. **Verifikasi (kode, bukan LLM):** setiap temuan dipetakan ke sumbernya lewat metadata grounding. Temuan tanpa sumber dibuang. Temuan yang sumbernya hanya media sosial ditandai "belum terkonfirmasi". Tanggal lebih dari 180 hari atau di masa depan ditandai.
-3. **Analisis:** dampak operasional, tingkat risiko, mitigasi sesuai SOP (RAG), dan jenis skenario yang paling mirip.
-4. **Simulasi:** pola masalahnya diterapkan ke data toko demo. Injeksi dicoba dulu di salinan database dan baru diterapkan bila detektor benar-benar menghasilkan anomali baru. Anomali diberi label "simulasi kasus <perusahaan>" dan langsung diinvestigasi.
+3. **Analisis:** dampak operasional, tingkat risiko, mitigasi sesuai SOP (RAG), jenis skenario yang paling mirip, serta produk dan gerai yang disebut di temuan. AI juga menilai relevansi: artikel opini, kisah sukses, tips, atau promo ditandai "Bukan masalah operasional perusahaan" dan tidak bisa disimulasikan.
+4. **Simulasi:** pola masalahnya diterapkan ke data toko demo, pada produk dan gerai yang paling cocok dengan temuan (misalnya temuan soal buku disimulasikan pada produk buku, bukan produk acak). Injeksi dicoba dulu di salinan database dan baru diterapkan bila detektor benar-benar menghasilkan anomali baru. Anomali diberi label "simulasi kasus <perusahaan>" dan langsung diinvestigasi.
 
 **Katalog simulasi per perusahaan:** saat analisis riset, AI sekalian menyusun katalog simulasi (4 gerai dan 8 produk khas perusahaan, harga perkiraan dalam rupiah). Saat temuan disimulasikan, toko demo diganti ke katalog itu (anomali katalog lama diarsipkan, riwayat tetap ada), sehingga simulasi Hermès memakai produk seperti tas dan syal, bukan sembako. Bila katalog tidak tersedia, toko sembako default dipakai.
 

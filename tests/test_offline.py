@@ -85,10 +85,11 @@ class FakeAI:
                                  "ringkasan": "Tidak merujuk artikel nyata.", "artikel": ["A99"]}]}
         if "Berikut temuan terverifikasi" in prompt:
             return {"ringkasan": "Risiko gangguan sistem tinggi.", "temuan": [
-                {"nomor": 1, "dampak": "Distribusi berhenti", "risiko": "tinggi", "mitigasi": ["Prosedur manual"],
-                 "sop": ["sop_data_pos.md"], "skenario": "data_gap", "alasan_skenario": "Sistem mati"},
-                {"nomor": 2, "dampak": "-", "risiko": "rendah", "mitigasi": [], "sop": [], "skenario": "none",
-                 "alasan_skenario": "Tidak tampak di data toko"}],
+                {"nomor": 1, "relevan": True, "dampak": "Distribusi berhenti", "risiko": "tinggi", "mitigasi": ["Prosedur manual"],
+                 "sop": ["sop_data_pos.md"], "skenario": "data_gap", "alasan_skenario": "Sistem mati",
+                 "produk_terkait": "AH Produk 5", "gerai_terkait": "AH Gerai 2"},
+                {"nomor": 2, "relevan": False, "alasan_relevansi": "Hanya keluhan pengguna di media sosial", "dampak": "-",
+                 "risiko": "rendah", "mitigasi": [], "sop": [], "skenario": "wrong_discount", "alasan_skenario": "-"}],
                 "katalog": {"toko": [{"nama": f"AH Gerai {i}", "kota": c} for i, c in
                                      enumerate(["Amsterdam", "Rotterdam", "Utrecht", "Den Haag"], 1)],
                             "produk": [{"nama": f"AH Produk {i}", "kategori": "Grocery", "harga": 30000 + i * 1000,
@@ -108,7 +109,9 @@ class FakeAI:
             return {**base, "akar_masalah": "Stok habis karena pengiriman terlambat.", "bukti": claims, "tindakan": [
                 {"tool": "transfer_stock", "args": {"product_id": 1, "from_store_id": 1, "to_store_id": 2, "qty": 400}},
                 {"tool": "transfer_stock", "args": {"product_id": 1, "from_store_id": 1, "to_store_id": 2, "qty": 200}},
-                {"tool": "create_ticket", "args": {"title": "Supplier terlambat", "priority": "HIGH", "description": "-"}},
+                {"tool": "create_ticket", "args": {"title": "Supplier terlambat", "priority": "HIGH", "description": "-"},
+                 "alasan": "Pengiriman tertunda [E3]", "langkah": ["Hubungi supplier hari ini", "Pesan ke supplier alternatif"],
+                 "pic": "Procurement", "target_waktu": "24 jam", "hasil": "Jadwal kirim pasti"},
                 {"tool": "hapus_data", "args": {}}]}
         return {**base, "bukti": [{"klaim": alert["title"], "ref": ["E0"]}],
                 "tindakan": [{"tool": "create_ticket", "args": {"title": f"Tindak lanjut {alert['id']}", "priority": "MEDIUM",
@@ -192,6 +195,11 @@ def main():
         check(r["verified"], "setelah perbaikan, semua klaim didukung bukti")
         check([p["tool"] for p in sink.proposals] == ["transfer_stock", "create_ticket"],
               "transfer melebihi stok dan tool tak dikenal ditolak, usulan valid disimpan")
+        tk = sink.proposals[1]
+        check(tk["detail"]["langkah"][0] == "Hubungi supplier hari ini" and tk["detail"]["pic"] == "Procurement"
+              and "Langkah penyelesaian" in tk["args"]["description"], "detail penyelesaian dari AI tersimpan dan masuk ke tiket")
+        check(sink.proposals[0]["detail"]["langkah"] and sink.proposals[0]["detail"]["target_waktu"],
+              "usulan tanpa detail dari AI tetap diberi langkah default")
         sink2 = agent.MemorySink()
         r2 = agent.investigate(next(a for a in detect.detect_alerts() if a["id"] == "gap:1"), sink2)
         check(r2["steps"] == 1, "anomali biasa cukup 1 panggilan LLM")
@@ -248,6 +256,7 @@ def main():
         old_runs = len(store.list_runs(50))
         info = eng.simulate(rid, 1)
         check(store.get_alert(info["alert_id"])["type"] == "data_gap", "simulasi membuat anomali baru beranotasi kasus")
+        check(info["alert_id"] == "gap:2", "simulasi memakai gerai yang disebut AI untuk temuan itu")
         cat = scenarios.current_catalog(config.BUSINESS_DB_PATH)
         check(info["catalog_switched"] and cat["key"].startswith("ahold-delhaize") and cat["products"][0][1] == "AH Produk 1",
               "toko demo diganti ke katalog simulasi perusahaan")
@@ -255,11 +264,12 @@ def main():
         check(len(store.list_runs(50)) >= old_runs, "riwayat investigasi lama tetap tersimpan")
         wait_idle(eng)
         check(store.get_run_row(info["run_id"])["status"] == "done", "anomali simulasi diinvestigasi agent")
+        check(store.get_research(rid)["result"]["issues"][1]["relevant"] is False, "temuan bukan masalah operasional ditandai")
         try:
             eng.simulate(rid, 2)
-            check(False, "temuan tanpa skenario tidak bisa disimulasikan")
+            check(False, "temuan bukan masalah operasional tidak bisa disimulasikan")
         except ValueError:
-            check(True, "temuan tanpa skenario tidak bisa disimulasikan")
+            check(True, "temuan bukan masalah operasional tidak bisa disimulasikan")
         print("Riset cadangan Google News")
         from backend import news, research
         today = time.strftime("%a, %d %b %Y 03:00:00 GMT")

@@ -28,6 +28,8 @@ Aturan:
 - Jangan mengusulkan tindakan yang tidak perlu: tidak ada aksi korektif untuk kegiatan terjadwal yang disetujui,
   dan tidak ada aksi stok/harga bila data penjualan belum lengkap.
 - Transfer stok: toko asal tidak boleh turun di bawah reorder point.
+- Setiap tindakan wajib lengkap: alasan (rujuk ID bukti), 2-5 langkah penyelesaian yang spesifik untuk masalah ini
+  (sebut produk, gerai, jumlah, dan pihak terkait; bukan langkah generik), PIC, target waktu, dan hasil terukur.
 - Penjualan turun tanpa keterlambatan pengiriman dan stok masih menumpuk berarti permintaan turun: usulkan
   menunda/mengurangi pesanan ke Procurement dan/atau transfer stok ke toko yang penjualannya masih normal.
 - Bila anomali punya detail.simulation, itu simulasi di data demo yang meniru pola kasus publik suatu
@@ -53,7 +55,13 @@ RESPONSE_DOC = """Bentuk JSON jawaban:
  "bukti": [{"klaim": "fakta dengan angka dari bukti", "ref": ["E1"]}],
  "sop": ["nama_file_sop.md"],
  "dampak": "estimasi dampak bila ada di bukti, atau kosong",
- "tindakan": [{"tool": "create_ticket", "args": {...}, "alasan": "..."}],
+ "tindakan": [{"tool": "create_ticket", "args": {...},
+               "alasan": "kenapa tindakan ini perlu, rujuk ID bukti",
+               "ref": ["E2"],
+               "langkah": ["langkah konkret 1", "langkah konkret 2", "..."],
+               "pic": "tim/jabatan penanggung jawab",
+               "target_waktu": "mis. hari ini, 24 jam, 3 hari",
+               "hasil": "hasil terukur yang menandakan masalah selesai"}],
  "alasan_tanpa_tindakan": "isi bila tindakan kosong"}"""
 
 
@@ -66,9 +74,9 @@ class MemorySink:
     def event(self, kind, data):
         self.events.append({"kind": kind, "data": data})
 
-    def proposal(self, tool, args, label):
+    def proposal(self, tool, args, label, detail=None):
         self.proposals.append({"id": len(self.proposals) + 1, "tool": tool, "args": args, "label": label,
-                               "status": "pending"})
+                               "status": "pending", "detail": detail})
         return len(self.proposals)
 
 
@@ -185,6 +193,41 @@ def _ask(alert, ev, sink, final=False, repair=None):
     return data, model
 
 
+TARGET_BY_PRIORITY = {"HIGH": "24 jam", "MEDIUM": "3 hari", "LOW": "1 minggu"}
+DEFAULT_DETAIL = {
+    "transfer_stock": {"langkah": ["Gerai asal menyiapkan dan mengemas unit sesuai jumlah transfer",
+                                   "Kirim dengan armada antar-gerai dan catat nomor surat jalan",
+                                   "Gerai tujuan memeriksa barang lalu mengonfirmasi penerimaan",
+                                   "Perbarui stok di sistem untuk kedua gerai"],
+                       "pic": "Supply Chain bersama Store Manager gerai asal dan tujuan", "target_waktu": "24 jam",
+                       "hasil": "Stok gerai tujuan kembali di atas reorder point tanpa membuat gerai asal kekurangan"},
+    "pause_promo": {"langkah": ["Nonaktifkan promo di POS dan kanal online", "Kembalikan harga normal dan cek label harga di rak",
+                                "Pricing Manager meninjau ulang persetujuan promo", "Laporkan estimasi kerugian ke Finance"],
+                    "pic": "Pricing Team", "target_waktu": "Hari ini",
+                    "hasil": "Tidak ada lagi penjualan di bawah harga pokok"},
+    "create_ticket": {"langkah": ["Tim penerima menunjuk PIC dan mengonfirmasi tiket", "Jalankan perbaikan sesuai deskripsi tiket",
+                                  "Laporkan hasil beserta bukti, lalu tutup tiket"],
+                      "pic": "Tim terkait sesuai tiket", "target_waktu": "",
+                      "hasil": "Penyebab masalah ditangani dan tiket ditutup dengan bukti"},
+    "send_notification": {"langkah": ["Penerima membaca dan mengonfirmasi notifikasi", "Penerima menjalankan instruksi di pesan"],
+                          "pic": "", "target_waktu": "Hari ini",
+                          "hasil": "Pihak terkait mengetahui masalah dan langkah yang harus diambil"},
+}
+
+
+def _detail(tool, action, args):
+    """Detail usulan untuk manusia: alasan, langkah penyelesaian, PIC, target waktu, hasil yang diharapkan."""
+    base = DEFAULT_DETAIL[tool]
+    steps = [str(s).strip() for s in (action.get("langkah") or []) if str(s).strip()][:6] or list(base["langkah"])
+    pic = str(action.get("pic") or "").strip() or base["pic"] or str(args.get("to", ""))
+    target = (str(action.get("target_waktu") or "").strip() or base["target_waktu"]
+              or TARGET_BY_PRIORITY.get(str(args.get("priority", "")).upper(), "3 hari"))
+    refs = [r for r in (action.get("ref") or []) if isinstance(r, str)] or sorted(set(re.findall(r"\bE\d+\b", str(action.get("alasan", "")))))
+    return {"alasan": str(action.get("alasan", "")).strip(), "ref": refs, "langkah": steps, "pic": pic,
+            "target_waktu": target, "hasil": str(action.get("hasil") or "").strip() or base["hasil"],
+            "langkah_dari_ai": bool(action.get("langkah"))}
+
+
 def _proposals(result, sink):
     labels, seen = [], set()
     for a in result.get("tindakan", []) or []:
@@ -193,8 +236,12 @@ def _proposals(result, sink):
             sink.event("tool", {"name": str(tool), "args": a.get("args", {}),
                                 "result": {"error": "Tool aksi tidak dikenal, usulan diabaikan."}})
             continue
+        args = dict(a.get("args") or {})
+        if tool == "create_ticket" and a.get("langkah"):
+            steps = "\n".join(f"{i}. {s}" for i, s in enumerate(a["langkah"][:6], 1))
+            args["description"] = f"{args.get('description', '')}\n\nLangkah penyelesaian:\n{steps}".strip()
         try:
-            clean, label = tools.validate_action(tool, a.get("args", {}))
+            clean, label = tools.validate_action(tool, args)
         except tools.ActionError as e:
             sink.event("tool", {"name": tool, "args": a.get("args", {}), "result": {"error": f"Usulan ditolak validasi: {e}"}})
             continue
@@ -202,8 +249,9 @@ def _proposals(result, sink):
         if key in seen:
             continue
         seen.add(key)
-        sink.proposal(tool, clean, label)
-        sink.event("proposal", {"tool": tool, "label": label, "args": clean, "reason": a.get("alasan", "")})
+        detail = _detail(tool, a, clean)
+        sink.proposal(tool, clean, label, detail)
+        sink.event("proposal", {"tool": tool, "label": label, "args": clean, "reason": a.get("alasan", ""), "detail": detail})
         labels.append(label)
     return labels
 

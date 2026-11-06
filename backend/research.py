@@ -48,6 +48,8 @@ kelangkaan, gangguan pasokan atau distribusi, kesalahan harga, gangguan sistem a
 penarikan produk, masalah keuangan yang mengganggu operasi, sanksi regulator.
 
 Aturan:
+- Masalah harus terjadi pada operasi atau layanan perusahaan itu sendiri. Abaikan artikel opini, kisah sukses pengguna
+  atau penjual, tips, promosi, dan berita saham.
 - Jangan menebak. Jika perusahaan tidak ditemukan atau tampaknya fiktif, tulis DITEMUKAN: tidak dan jangan tulis blok masalah.
 - Jika ada beberapa perusahaan dengan nama mirip, pilih yang paling dikenal dan sebutkan nama resminya.
 - Jika perusahaan ada tetapi tidak ada masalah terbaru, tulis DITEMUKAN: ya tanpa blok masalah.
@@ -72,25 +74,38 @@ Dokumen SOP yang relevan (hasil RAG):
 {sops}
 
 Untuk setiap temuan, nilai:
+- relevan: true bila temuan benar-benar masalah pada operasi atau layanan {company} sendiri (stok, pasokan, distribusi,
+  harga/diskon yang salah, sistem, gerai, penarikan produk, keuangan yang mengganggu operasi, sanksi). false bila hanya
+  opini, kisah sukses pengguna/penjual, tips, promosi, berita saham, atau bukan tentang operasi {company}.
+- alasan_relevansi: satu kalimat
 - dampak: dampak operasional yang mungkin terjadi di toko/gudang bila masalah seperti ini terjadi (1-2 kalimat)
 - risiko: tinggi, sedang, atau rendah
 - mitigasi: 2-4 langkah konkret, sesuai SOP bila ada
 - sop: daftar nama file SOP yang dirujuk (boleh kosong)
 - skenario: jenis skenario data toko yang paling mirip untuk disimulasikan, salah satu dari:
   {scenarios}
-  Perhatikan arah: permintaan/penjualan TURUN -> demand_drop, permintaan NAIK -> demand_spike.
+  Aturan pemilihan (pilih "none" bila tidak ada yang benar-benar cocok atau relevan=false):
+  stockout_delay = stok habis karena pasokan/pengiriman terlambat; supplier_delay = satu pemasok terlambat ke banyak gerai;
+  wrong_discount = HANYA kesalahan harga/diskon yang membuat harga terlalu murah atau di bawah modal (keluhan harga
+  terlalu mahal BUKAN wrong_discount); demand_spike = permintaan naik tajam; demand_drop = permintaan/penjualan turun;
+  data_gap = gangguan sistem, aplikasi, atau serangan siber yang membuat transaksi/data tidak tercatat;
+  store_closure = gerai tutup sementara.
+- produk_terkait: nama produk di katalog yang paling terkait dengan temuan (wajib ada di katalog bila skenario bukan none)
+- gerai_terkait: nama gerai di katalog yang paling terkait (boleh kosong)
   Pilih "none" bila masalahnya tidak tampak di data penjualan/stok toko (misalnya murni hukum atau keuangan).
 - alasan_skenario: satu kalimat alasan pemilihan skenario
 
 Susun juga katalog SIMULASI untuk toko demo yang mencerminkan bisnis {company}: tepat 4 toko/gerai (nama dan kota yang
 masuk akal untuk perusahaan itu, boleh campuran Indonesia dan luar negeri) dan tepat 8 produk khas perusahaan itu.
+Produk yang disebut di temuan WAJIB dimasukkan ke katalog (misalnya temuan tentang buku -> ada produk buku).
 Harga dalam rupiah, perkiraan wajar (bukan data resmi); harga_pokok lebih kecil dari harga; qty_harian = rata-rata unit
 terjual per gerai per hari (3 sampai 120, kecil untuk barang mewah, besar untuk barang harian).
 
 Balas HANYA JSON dengan bentuk:
 {{"ringkasan": "<2-3 kalimat gambaran risiko keseluruhan>",
-  "temuan": [{{"nomor": 1, "dampak": "...", "risiko": "tinggi", "mitigasi": ["..."], "sop": ["sop_x.md"],
-              "skenario": "stockout_delay", "alasan_skenario": "..."}}],
+  "temuan": [{{"nomor": 1, "relevan": true, "alasan_relevansi": "...", "dampak": "...", "risiko": "tinggi",
+              "mitigasi": ["..."], "sop": ["sop_x.md"], "skenario": "stockout_delay", "alasan_skenario": "...",
+              "produk_terkait": "nama produk di katalog", "gerai_terkait": "nama gerai di katalog"}}],
   "katalog": {{"toko": [{{"nama": "...", "kota": "..."}}],
               "produk": [{{"nama": "...", "kategori": "...", "harga": 0, "harga_pokok": 0, "qty_harian": 0}}]}}}}"""
 
@@ -242,13 +257,20 @@ def analyze(company, issues, sink):
     for issue in issues:
         a = by_no.get(issue["id"], {})
         scenario = a.get("skenario") if a.get("skenario") in SCENARIO_LABELS else "none"
+        relevant = a.get("relevan") is not False
+        if not relevant:
+            scenario = "none"
+            issue["flags"] = issue.get("flags", []) + ["Bukan masalah operasional perusahaan"]
         issue.update(
+            relevant=relevant, relevance_reason=str(a.get("alasan_relevansi", "")).strip(),
+            target={"product": str(a.get("produk_terkait") or "").strip()[:60], "store": str(a.get("gerai_terkait") or "").strip()[:60]},
             impact=str(a.get("dampak", "")).strip(),
             risk=a.get("risiko") if a.get("risiko") in RISKS else "sedang",
             mitigation=[str(m).strip() for m in a.get("mitigasi", []) if str(m).strip()][:5],
             sop=[s for s in a.get("sop", []) if s in docs],
             scenario=scenario, scenario_label=SCENARIO_LABELS[scenario],
-            scenario_reason=str(a.get("alasan_skenario", "")).strip(),
+            scenario_reason=(str(a.get("alasan_skenario", "")).strip() if relevant
+                             else str(a.get("alasan_relevansi", "")).strip() or "Bukan masalah operasional perusahaan."),
         )
     catalog = None
     try:
@@ -269,7 +291,8 @@ NEWS_PROMPT = """Hari ini {today}. Berikut artikel berita terbaru dari Google Ne
 
 Kelompokkan masalah OPERASIONAL yang benar-benar terjadi pada perusahaan itu (maksimal 6, terbaru dulu), misalnya stok kosong,
 gangguan pasokan atau distribusi, kesalahan harga, gangguan sistem atau serangan siber, penutupan toko, penarikan produk,
-masalah keuangan yang mengganggu operasi, sanksi regulator. Abaikan artikel promosi, saham, atau yang bukan tentang perusahaan itu.
+masalah keuangan yang mengganggu operasi, sanksi regulator. Masalah harus terjadi pada operasi atau layanan perusahaan itu
+sendiri. Abaikan artikel opini, kisah sukses pengguna atau penjual, tips, promosi, berita saham, dan yang bukan tentang perusahaan itu.
 Ringkasan hanya boleh memuat informasi dari judul artikel yang dirujuk.
 
 Bentuk JSON:

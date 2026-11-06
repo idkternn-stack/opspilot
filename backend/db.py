@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, kind TEXT, data TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS proposals(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, alert_id TEXT, tool TEXT, args TEXT,
-  label TEXT, status TEXT, result TEXT, created_at TEXT, decided_at TEXT);
+  label TEXT, status TEXT, result TEXT, created_at TEXT, decided_at TEXT, detail TEXT);
 CREATE TABLE IF NOT EXISTS research(
   id TEXT PRIMARY KEY, company TEXT, status TEXT, model TEXT, result TEXT, error TEXT,
   created_at TEXT, started_at TEXT, finished_at TEXT, duration_s REAL);
@@ -61,6 +61,9 @@ def init_app_db():
         con = app()
         try:
             con.executescript(APP_SCHEMA)
+            cols = {r[1] for r in con.execute("PRAGMA table_info(proposals)")}
+            if "detail" not in cols:  # database dari versi lama
+                con.execute("ALTER TABLE proposals ADD COLUMN detail TEXT")
             con.commit()
         finally:
             con.close()

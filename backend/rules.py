@@ -34,6 +34,38 @@ def _transfer(ev, pid, to_sid, need):
             "alasan": f"{r['store']} punya stok {r['stock']} (reorder point {r['reorder_point']})"}, r
 
 
+def _enrich(out, d, ev):
+    """Melengkapi tindakan aturan dengan langkah penyelesaian yang spesifik."""
+    names = {r["store_id"]: r["store"] for r in ev.rows("stock_all")}
+    if d.get("store_id") and d.get("store"):
+        names.setdefault(int(d["store_id"]), d["store"])
+    product = d.get("product")
+    if not product:
+        pid = next((a["args"].get("product_id") for a in out["tindakan"] if a["args"].get("product_id")), None)
+        row = next((r for r in ev.rows("sales_by_product") if r.get("product_id") == pid), None)
+        product = row["product"] if row else "produk terkait"
+    refs = sorted({r for b in out["bukti"] for r in b.get("ref", [])})[:3]
+    for a in out["tindakan"]:
+        a.setdefault("ref", refs)
+        tool, args = a["tool"], a["args"]
+        if tool == "transfer_stock":
+            src = names.get(args["from_store_id"], f"gerai {args['from_store_id']}")
+            dst = names.get(args["to_store_id"], f"gerai {args['to_store_id']}")
+            a.setdefault("langkah", [f"{src} menyiapkan {args['qty']} unit {product} dan membuat surat jalan",
+                                     f"Kirim ke {dst} dengan armada antar-gerai hari ini",
+                                     f"{dst} memeriksa barang, mengonfirmasi penerimaan, dan memajang produk",
+                                     "Perbarui stok kedua gerai di sistem dan pantau penjualan 3 hari ke depan"])
+            a.setdefault("pic", f"Supply Chain bersama Store Manager {src} dan {dst}")
+            a.setdefault("hasil", f"{product} kembali tersedia/seimbang di {dst} tanpa membuat {src} di bawah reorder point")
+        elif tool == "pause_promo":
+            a.setdefault("langkah", [f"Nonaktifkan promo {product} di POS dan kanal online {d.get('store', '')}".strip(),
+                                     "Kembalikan harga normal dan ganti label harga di rak",
+                                     "Pricing Manager memeriksa siapa yang menyetujui promo dan memperbaiki prosedurnya",
+                                     "Finance mencatat estimasi kerugian selama promo berjalan"])
+            a.setdefault("hasil", f"Harga {product} kembali di atas harga pokok mulai hari ini")
+    return out
+
+
 def diagnose(alert, ev):
     t, d = alert["type"], alert.get("detail", {})
     eid = lambda key: [ev.by_key[key]["id"]] if key in ev.by_key else []
@@ -51,13 +83,16 @@ def diagnose(alert, ev):
         out["bukti"].append({"klaim": f"store_events mencatat '{e['event']}' dari {e['start_date']} sampai {e['end_date']}",
                              "ref": eid("events")})
         out["alasan_tanpa_tindakan"] = "Kegiatan terjadwal yang sudah disetujui, bukan masalah operasional."
-        return out
+        return _enrich(out, d, ev)
     if t in ("revenue_drop", "sales_drop") and pos:
         out["akar_masalah"] = "Data penjualan tidak lengkap karena sinkronisasi POS gagal."
         out["bukti"].append({"klaim": f"pos_sync_log berstatus {pos[0]['status']} pada {pos[0]['date']}", "ref": eid("pos_failed")})
         out["tindakan"].append({"tool": "create_ticket", "args": {"title": "Sinkronisasi ulang data POS", "priority": "HIGH",
-                                "description": "Log POS gagal, data penjualan belum lengkap."}, "alasan": "SOP gangguan POS"})
-        return out
+                                "description": "Log POS gagal, data penjualan belum lengkap."}, "alasan": "SOP gangguan POS",
+                                "pic": "IT Support", "langkah": ["IT Support memeriksa koneksi POS gerai ke server pusat",
+                                "Jalankan sinkronisasi ulang transaksi tanggal yang gagal", "Cocokkan total transaksi dengan struk manual gerai",
+                                "Tunda keputusan stok/harga sampai data lengkap"], "hasil": "Data penjualan tanggal yang hilang kembali lengkap"})
+        return _enrich(out, d, ev)
 
     if t == "revenue_drop":
         top = (ev.rows("sales_by_product") or [{}])[0]
@@ -78,7 +113,11 @@ def diagnose(alert, ev):
             if tr:
                 out["tindakan"].append(tr[0])
             out["tindakan"].append({"tool": "create_ticket", "args": {"title": f"Pengiriman {top['product']} terlambat", "priority": "HIGH",
-                                    "description": f"Hubungi {late[0]['supplier']} atau supplier alternatif."}, "alasan": "SOP stockout"})
+                                    "description": f"Hubungi {late[0]['supplier']} atau supplier alternatif."}, "alasan": "SOP stockout",
+                                    "pic": "Procurement", "langkah": [f"Hubungi {late[0]['supplier']} untuk kepastian jadwal kirim {top['product']} hari ini",
+                                    "Bila keterlambatan lebih dari 3 hari, terbitkan PO darurat ke supplier alternatif",
+                                    f"Kabari Store Manager {d.get('store')} soal ETA barang", "Catat keterlambatan ini untuk evaluasi kinerja supplier"],
+                                    "hasil": f"Pengiriman {top['product']} ke {d.get('store')} punya jadwal pasti dan stok kembali normal"})
         else:
             out["akar_masalah"] = f"Penurunan terbesar ada pada {top.get('product', 'produk tertentu')}; penyebab pasti perlu dicek manual."
             out["tindakan"].append({"tool": "create_ticket", "args": {"title": f"Investigasi penurunan pendapatan {d.get('store')}",
@@ -101,7 +140,12 @@ def diagnose(alert, ev):
             out["bukti"].append({"klaim": "Tidak ada pengiriman berstatus DELAYED", "ref": eid("deliveries_product")})
             out["dampak"] = "Modal tertahan di stok berlebih dan risiko barang tidak laku."
             out["tindakan"].append({"tool": "create_ticket", "args": {"title": f"Tunda pesanan {d.get('product')}", "priority": "MEDIUM",
-                                    "description": f"Permintaan di {c['store']} turun, stok menumpuk."}, "alasan": "SOP eskalasi"})
+                                    "description": f"Permintaan di {c['store']} turun, stok menumpuk."}, "alasan": "SOP eskalasi",
+                                    "pic": "Procurement bersama Merchandising", "langkah": [f"Tunda atau kurangi PO {d.get('product')} berikutnya untuk {c['store']}",
+                                    "Merchandising mengevaluasi penyebab turunnya permintaan (harga, tren, kompetitor)",
+                                    "Siapkan rencana penjualan stok lama (bundling atau pindah ke gerai yang masih laku)",
+                                    "Pantau penjualan mingguan sampai kembali normal"],
+                                    "hasil": f"Stok {d.get('product')} di {c['store']} turun ke level wajar dalam 2-4 minggu"})
             first = int(d["stores"][0]["store_id"])
             others = [r for r in ev.rows("sales_by_store") if r.get("store_id") != first and r.get("qty_terkini")]
             if others:
@@ -117,7 +161,11 @@ def diagnose(alert, ev):
                                    if len(delayed) > 1 else f"Stok {d.get('product')} habis karena pengiriman {sup} terlambat.")
             out["bukti"].append({"klaim": f"{len(delayed)} pengiriman dari {sup} berstatus DELAYED", "ref": eid("deliveries_product")})
             out["tindakan"].append({"tool": "create_ticket", "args": {"title": f"Supplier {sup} terlambat", "priority": "HIGH",
-                                    "description": "Procurement menghubungi supplier alternatif."}, "alasan": "SOP stockout poin 4"})
+                                    "description": "Procurement menghubungi supplier alternatif."}, "alasan": "SOP stockout poin 4",
+                                    "pic": "Procurement", "langkah": [f"Konfirmasi ke {sup} penyebab keterlambatan dan jadwal kirim baru",
+                                    f"Terbitkan PO darurat {d.get('product')} ke supplier alternatif untuk gerai terdampak",
+                                    "Prioritaskan pengiriman ke gerai dengan stok nol", "Evaluasi kontrak dan kinerja supplier setelah kasus selesai"],
+                                    "hasil": f"Semua gerai terdampak kembali punya stok {d.get('product')}"})
             first = int(d["stores"][0]["store_id"]) if d.get("stores") else None
             exclude = {int(s["store_id"]) for s in d.get("stores", [])}
             best = _donor(ev.rows("stock_all"), exclude, d["product_id"]) if first else None
@@ -147,7 +195,10 @@ def diagnose(alert, ev):
             {"tool": "pause_promo", "args": {"store_id": d["store_id"], "product_id": d["product_id"], "reason": "Harga di bawah harga pokok"},
              "alasan": "SOP pricing poin 2"},
             {"tool": "create_ticket", "args": {"title": f"Kesalahan diskon {d.get('product')} di {d.get('store')}", "priority": "HIGH",
-             "description": "Promo dihentikan, perlu cek persetujuan Pricing Manager."}, "alasan": "SOP pricing poin 2"}]
+             "description": "Promo dihentikan, perlu cek persetujuan Pricing Manager."}, "alasan": "SOP pricing poin 2",
+             "pic": "Pricing Team", "langkah": ["Telusuri siapa yang memasang promo dan apakah ada persetujuan Pricing Manager",
+             "Perbaiki aturan di sistem promo agar diskon di atas 25% wajib persetujuan", "Laporkan total kerugian ke Finance"],
+             "hasil": "Kesalahan diskon tidak terulang"}]
 
     elif t == "demand_spike":
         cover = ev.by_key.get("cover", {}).get("result", {}) if "cover" in ev.by_key else {}
@@ -161,7 +212,10 @@ def diagnose(alert, ev):
             if tr:
                 out["tindakan"].append(tr[0])
         out["tindakan"].append({"tool": "create_ticket", "args": {"title": f"Tambah pesanan {d.get('product')}", "priority": "MEDIUM",
-                                "description": "Lonjakan permintaan, stok menipis."}, "alasan": "SOP permintaan poin 3"})
+                                "description": "Lonjakan permintaan, stok menipis."}, "alasan": "SOP permintaan poin 3",
+                                "pic": "Procurement", "langkah": [f"Tambah pesanan {d.get('product')} untuk {d.get('store')} sesuai penjualan terkini",
+                                "Minta supplier mempercepat pengiriman", "Pantau penjualan harian selama lonjakan berlangsung"],
+                                "hasil": f"Stok {d.get('product')} di {d.get('store')} cukup untuk minimal 7 hari"})
 
     elif t == "data_gap":
         failed = [r for r in ev.rows("pos_log") if r.get("status") != "OK"]
@@ -172,11 +226,15 @@ def diagnose(alert, ev):
         out["dampak"] = "Data belum lengkap, jadi tindakan stok atau harga ditunda."
         out["tindakan"] += [
             {"tool": "create_ticket", "args": {"title": f"Sinkronisasi ulang POS {d.get('store')}", "priority": "HIGH",
-             "description": "Data penjualan hilang karena sinkronisasi gagal."}, "alasan": "SOP data POS poin 2"},
+             "description": "Data penjualan hilang karena sinkronisasi gagal."}, "alasan": "SOP data POS poin 2",
+             "pic": "IT Support", "langkah": [f"IT Support memeriksa koneksi POS {d.get('store')} ke server pusat",
+             "Jalankan sinkronisasi ulang transaksi tanggal yang gagal", "Cocokkan hasil sinkron dengan struk manual gerai",
+             "Pasang pemantauan agar gagal sinkron terdeteksi di hari yang sama"],
+             "hasil": f"Data penjualan {d.get('store')} lengkap kembali"},
             {"tool": "send_notification", "args": {"to": f"Store Manager {d.get('store')}",
              "message": "Simpan bukti transaksi manual sampai data tersinkron."}, "alasan": "SOP data POS poin 4"}]
     else:
         out["akar_masalah"] = "Jenis anomali belum punya aturan diagnosis."
     if loss and not out["dampak"]:
         out["dampak"] = f"Estimasi pendapatan hilang {_rupiah(loss['lost_revenue_per_day'])} per hari."
-    return out
+    return _enrich(out, d, ev)

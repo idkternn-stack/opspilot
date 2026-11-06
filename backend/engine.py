@@ -26,8 +26,8 @@ class DbSink:
         elif kind in ("retry", "proposal", "verify"):
             log(f"{self.run_id} {kind}: {data.get('text') or data.get('label')}")
 
-    def proposal(self, tool, args, label):
-        return store.add_proposal(self.run_id, self.alert_id, tool, args, label)
+    def proposal(self, tool, args, label, detail=None):
+        return store.add_proposal(self.run_id, self.alert_id, tool, args, label, detail)
 
 
 class Engine:
@@ -198,7 +198,7 @@ class Engine:
             if ev["kind"] == "proposal":
                 try:
                     clean, label = tools.validate_action(ev["data"]["tool"], ev["data"]["args"])
-                    sink.proposal(ev["data"]["tool"], clean, label)
+                    sink.proposal(ev["data"]["tool"], clean, label, ev["data"].get("detail"))
                 except tools.ActionError as e:
                     sink.event("status", {"text": f"Usulan dari rekaman tidak valid untuk data saat ini: {e}"})
                     continue

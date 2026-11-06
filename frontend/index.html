@@ -48,6 +48,7 @@ tr.click{cursor:pointer}
 input[type=text]{font:inherit;flex:1 1 260px;min-width:0;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
 input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
 .sources{margin:6px 0 0;padding-left:18px;font-size:13px}.sources a{color:var(--acc);word-break:break-word}
+.pd{margin:6px 0}.steps{margin:4px 0 6px;padding-left:22px}.steps li{margin:2px 0}
 .issue p{margin:6px 0}.issue ul{margin:4px 0 6px;padding-left:20px}
 .list-item{cursor:pointer;padding:8px 0;border-bottom:1px solid var(--line)}.list-item:last-child{border-bottom:0}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:min(560px,calc(100% - 32px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;z-index:9}
@@ -244,7 +245,15 @@ function eventHtml(e) {
 function proposalHtml(p, canDecide) {
   const done = {approved:['Dijalankan','ok'], rejected:['Ditolak',''], failed:['Gagal dijalankan','warn'], pending:['Menunggu persetujuan','warn']}[p.status];
   let h = `<div class="card" id="p${p.id}"><div class="row"><b>${esc(p.label)}</b>${pill(done)}</div>`;
-  h += `<details><summary>detail</summary><pre>${js(p.args)}</pre></details>`;
+  const dt = p.detail;
+  if (dt) {
+    if (dt.alasan) h += `<p class="pd"><b>Kenapa:</b> ${esc(dt.alasan)}${dt.ref && dt.ref.length ? ` <span class="small">[${esc(dt.ref.join(', '))}]</span>` : ''}</p>`;
+    if (dt.langkah && dt.langkah.length) h += `<div class="pd"><b>Langkah penyelesaian:</b><ol class="steps">${dt.langkah.map(s => `<li>${esc(s)}</li>`).join('')}</ol></div>`;
+    const meta = [dt.pic && `<b>PIC:</b> ${esc(dt.pic)}`, dt.target_waktu && `<b>Target:</b> ${esc(dt.target_waktu)}`].filter(Boolean).join(' · ');
+    if (meta) h += `<p class="pd">${meta}</p>`;
+    if (dt.hasil) h += `<p class="pd"><b>Masalah dianggap selesai bila:</b> ${esc(dt.hasil)}</p>`;
+  }
+  h += `<details><summary>parameter teknis</summary><pre>${js(p.args)}</pre></details>`;
   if (p.result) h += `<div class="small" style="margin-top:6px">${esc(p.result.verification || p.result.error || '')}</div>`;
   if (p.status === 'pending') h += `<div class="row left" style="margin-top:8px"><button ${canDecide ? '' : 'disabled'} onclick="decide(${p.id},true)">Setujui dan jalankan</button><button class="ghost" ${canDecide ? '' : 'disabled'} onclick="decide(${p.id},false)">Tolak</button></div>`;
   return h + '</div>';
@@ -258,7 +267,7 @@ function renderRun() {
     <div class="small" style="margin-top:4px">Pemicu: ${esc(TRIGGER[r.trigger] || r.trigger)} · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik · ${r.steps} panggilan AI · ${r.tool_calls} panggilan tool` : ''}</div></div>`;
   if ((r.model || '').startsWith('aturan')) h += '<div class="banner replay">Mode tanpa AI: semua model AI sedang tidak bisa dipakai (kuota habis atau sibuk), jadi diagnosis memakai aturan berbasis bukti. Jalankan ulang investigasi saat kuota tersedia untuk penalaran AI.</div>';
   const sim = r.alert && r.alert.detail && r.alert.detail.simulation;
-  if (sim) h += `<div class="banner replay">Simulasi pola kasus ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Pola yang ditiru: ${esc(sim.pattern)}. Toko demo memakai katalog simulasi ${esc(sim.catalog || sim.company)} dengan harga dan angka perkiraan, bukan data internal perusahaan.</div>`;
+  if (sim) h += `<div class="banner replay">Simulasi pola kasus ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Pola yang ditiru: ${esc(sim.pattern)}${sim.target_product ? ` pada produk ${esc(sim.target_product)}` : ''}. Toko demo memakai katalog simulasi ${esc(sim.catalog || sim.company)} dengan harga dan angka perkiraan, bukan data internal perusahaan.</div>`;
   if (r.mode === 'replay') h += '<div class="banner replay">Ini rekaman investigasi sebelumnya, bukan investigasi langsung. Usulan tindakan tetap divalidasi terhadap data saat ini.</div>';
   if (r.status === 'error') {
     h += `<div class="banner err">${esc(r.error)}</div><div class="row left"><button onclick="start('/api/investigate','${esc(r.alert_id)}')">Coba lagi</button>${r.has_recording ? `<button class="ghost" onclick="start('/api/replay','${esc(r.alert_id)}')">Putar rekaman</button>` : ''}</div>`;
@@ -316,6 +325,7 @@ function issueHtml(rid, i) {
   let h = `<div class="card issue"><div class="row"><b>${esc(i.title)}</b><span>${pill([i.category_label,''])} ${i.confidence === 'terkonfirmasi' ? pill(['Terkonfirmasi','ok']) : pill(['Belum terkonfirmasi','warn'])} ${i.risk ? pill(RISK[i.risk]) : ''}</span></div>`;
   h += `<div class="small">${esc(i.date || 'tanggal tidak jelas')}${i.flags.length ? ' · ' + esc(i.flags.join(', ')) : ''}</div>`;
   h += `<p>${esc(i.summary)}</p>`;
+  if (i.relevant === false) h += `<div class="banner err" style="font-weight:400">Bukan masalah operasional perusahaan${i.relevance_reason ? ': ' + esc(i.relevance_reason) : '.'}</div>`;
   h += `<div class="small">Sumber:</div><ol class="sources">${i.sources.map(s => { const u = safeUrl(s.url); return `<li>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)}</li>`; }).join('')}</ol>`;
   if (i.impact) h += `<p><b>Dampak operasional:</b> ${esc(i.impact)}</p>`;
   if (i.mitigation.length) h += `<b>Mitigasi:</b><ul>${i.mitigation.map(m => `<li>${esc(m)}</li>`).join('')}</ul>`;
@@ -323,7 +333,7 @@ function issueHtml(rid, i) {
   if (i.simulated) {
     h += `<div class="row left" style="margin-top:10px"><button class="ghost" onclick="selectRun('${esc(i.simulated.run_id)}', true)">Lihat investigasi simulasi</button><span class="small">${esc(i.simulated.alert_title)}</span></div>`;
   } else if (i.scenario && i.scenario !== 'none') {
-    h += `<div class="row left" style="margin-top:10px"><button onclick="simulateIssue('${esc(rid)}', ${i.id}, this)">Simulasikan di OpsPilot</button><span class="small">Pola: ${esc(i.scenario_label)}${i.scenario_reason ? '. ' + esc(i.scenario_reason) : ''}</span></div>`;
+    h += `<div class="row left" style="margin-top:10px"><button onclick="simulateIssue('${esc(rid)}', ${i.id}, this)">Simulasikan di OpsPilot</button><span class="small">Pola: ${esc(i.scenario_label)}${i.target && i.target.product ? ` · produk: ${esc(i.target.product)}` : ''}${i.target && i.target.store ? ` · gerai: ${esc(i.target.store)}` : ''}${i.scenario_reason ? '. ' + esc(i.scenario_reason) : ''}</span></div>`;
   } else {
     h += `<div class="small" style="margin-top:8px">Tidak bisa disimulasikan di data toko${i.scenario_reason ? ': ' + esc(i.scenario_reason) : '.'}</div>`;
   }

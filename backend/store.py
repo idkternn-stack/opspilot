@@ -120,6 +120,7 @@ def _proposal(row):
     row = dict(row)
     row["args"] = json.loads(row["args"] or "{}")
     row["result"] = json.loads(row["result"]) if row["result"] else None
+    row["detail"] = json.loads(row["detail"]) if row.get("detail") else None
     return row
 
 
@@ -151,9 +152,10 @@ def mark_stale_runs():
 
 
 # --------------------------------------------------------------- proposals
-def add_proposal(run_id, alert_id, tool, args, label):
-    return _write("INSERT INTO proposals(run_id, alert_id, tool, args, label, status, created_at) VALUES (?,?,?,?,?,?,?)",
-                  (run_id, alert_id, tool, json.dumps(args, ensure_ascii=False), label, "pending", _now()))
+def add_proposal(run_id, alert_id, tool, args, label, detail=None):
+    return _write("INSERT INTO proposals(run_id, alert_id, tool, args, label, status, created_at, detail) VALUES (?,?,?,?,?,?,?,?)",
+                  (run_id, alert_id, tool, json.dumps(args, ensure_ascii=False), label, "pending", _now(),
+                   json.dumps(detail, ensure_ascii=False) if detail else None))
 
 
 def decide(proposal_id, approve):
@@ -238,7 +240,8 @@ def save_recording(run_id):
             "verified": run["verified"], "steps": run["steps"], "tool_calls": run["tool_calls"],
             "duration_s": run["duration_s"],
             "events": [{"kind": e["kind"], "data": e["data"]} for e in run["events"] if e["kind"] != "decision"],
-            "proposals": [{"tool": p["tool"], "args": p["args"], "label": p["label"]} for p in run["proposals"]]}
+            "proposals": [{"tool": p["tool"], "args": p["args"], "label": p["label"], "detail": p.get("detail")}
+                          for p in run["proposals"]]}
     os.makedirs(config.RECORDINGS_DIR, exist_ok=True)
     with open(_recording_path(run["alert_id"]), "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=1)
