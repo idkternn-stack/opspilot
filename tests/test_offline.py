@@ -99,6 +99,9 @@ class FakeAI:
         n = self.turn[alert["id"]] = self.turn.get(alert["id"], 0) + 1
         base = {"rencana": ["Cek stok dan pengiriman", "Cocokkan dengan SOP"], "query_tambahan": [], "sop": ["sop_stockout.md"],
                 "akar_masalah": alert["title"], "dampak": "", "alasan_tanpa_tindakan": ""}
+        if alert["type"] == "case_report" and n == 1:
+            return {**base, "berita_tambahan": [{"alasan": "Cari tanggapan perusahaan", "query": "Albert Heijn tanggapan"}],
+                    "query_tambahan": [{"alasan": "tidak boleh", "sql": "SELECT 1"}]}
         if alert["id"] == "rev:2":
             if n == 1:
                 return {**base, "query_tambahan": [{"alasan": "Cek stok Minyak Goreng di Jakarta",
@@ -137,6 +140,10 @@ def main():
     saved = {k: getattr(config, k) for k in ("BUSINESS_DB_PATH", "APP_DB_PATH", "RECORDINGS_DIR", "MONITOR_INTERVAL_S",
                                              "LLM_ORDER", "GEMINI_API_KEY", "GROQ_API_KEY")}
     saved_providers = dict(llm.PROVIDERS)
+    from backend import news
+    real_search = news.search
+    news.search = lambda query, **k: [{"judul": f"Berita tentang {query}", "media": "Contoh", "tanggal": "2026-11-01",
+                                       "url": "https://news.google.com/rss/articles/x"}]
     try:
         config.BUSINESS_DB_PATH = os.path.join(tmp, "biz.db")
         config.APP_DB_PATH = os.path.join(tmp, "app.db")
@@ -282,6 +289,11 @@ def main():
               "temuan relevan lain juga dianalisis agent sebagai kasus nyata")
         check(any(e["kind"] == "tool" and e["data"]["name"] == "riset_sumber_publik" for e in case_run["events"]),
               "bukti kasus diambil dari sumber berita publik")
+        searches = [e["data"]["args"]["query"] for e in case_run["events"] if e["kind"] == "tool" and e["data"]["name"] == "search_news"]
+        check(len(searches) == 2 and searches[1] == "Albert Heijn tanggapan" and case_run["steps"] == 2,
+              "agent mencari berita kasus otomatis, lalu meminta berita tambahan sendiri (2 panggilan AI)")
+        check(not any(e["kind"] == "tool" and e["data"]["name"] == "run_sql_readonly" for e in case_run["events"]),
+              "kasus nyata tidak memakai query SQL ke data toko")
 
         print("Pola pelanggan: pembayaran, keluhan, pesanan")
         llm.reset_state()
@@ -344,6 +356,7 @@ def main():
         check(isinstance(data, dict), "batas Google Search tidak memblokir panggilan AI biasa")
         print("\nSemua tes lulus.")
     finally:
+        news.search = real_search
         for k, v in saved.items():
             setattr(config, k, v)
         llm.PROVIDERS.clear()

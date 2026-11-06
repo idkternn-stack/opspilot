@@ -8,7 +8,7 @@ OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot m
 
 | Fitur | Penjelasan |
 |---|---|
-| Autopilot | Monitor latar belakang mendeteksi anomali tiap 2 menit dan langsung mengantrekan investigasi, tanpa perlu diklik |
+| Autopilot (opsional) | Monitor latar belakang untuk data toko sintetis; nonaktif secara default, aktifkan dengan `OPSPILOT_AUTOPILOT=1` |
 | Investigasi hemat kuota | Bukti dikumpulkan otomatis lewat tool (SQL, estimasi kerugian, RAG SOP); AI menalar dalam 1-2 panggilan dan boleh meminta query tambahan |
 | Verifikasi berbasis kode | Setiap angka di klaim AI dicocokkan dengan bukti yang dirujuk; bila tidak cocok, AI diminta memperbaiki satu kali |
 | Multi-penyedia AI | Gemini (utama) dan Groq (cadangan opsional), pembatas permintaan per menit, pindah otomatis saat kuota habis |
@@ -58,7 +58,7 @@ flowchart LR
 1. **Cari:** Gemini dengan Grounding with Google Search menulis temuan dalam format tetap (judul, tanggal, kategori, ringkasan).
 2. **Verifikasi (kode, bukan LLM):** setiap temuan dipetakan ke sumbernya lewat metadata grounding. Temuan tanpa sumber dibuang. Temuan yang sumbernya hanya media sosial ditandai "belum terkonfirmasi". Tanggal lebih dari 180 hari atau di masa depan ditandai.
 3. **Analisis:** AI menilai relevansi (artikel opini, kisah sukses, tips, atau promo ditandai "Bukan masalah operasional perusahaan" dan tidak dianalisis), merumuskan inti masalah dalam satu kalimat, lalu menilai dampak, risiko, dan mitigasi sesuai SOP (RAG).
-4. **Analisis di OpsPilot:** temuan dijadikan anomali yang **sama dengan masalah aslinya**, misalnya "Transaksi kartu kredit ditolak, tapi tagihan tetap dibebankan (PT GoTo Gojek Tokopedia Tbk)". Agent menalar akar masalah dari ringkasan kasus, sumber berita, dan SOP, membedakan fakta dari dugaan, lalu mengusulkan tindakan penyelesaian (tiket ke tim pemilik masalah, notifikasi ke pelanggan atau manajemen) lengkap dengan langkah, PIC, target waktu, dan kriteria selesai. Semua tindakan menunggu persetujuan manusia.
+4. **Analisis di OpsPilot:** temuan dijadikan anomali yang **sama dengan masalah aslinya**, misalnya "Transaksi kartu kredit ditolak, tapi tagihan tetap dibebankan (PT GoTo Gojek Tokopedia Tbk)". Agent mencari berita tambahan tentang kasus itu lewat tool `search_news` (Google News, otomatis, dan AI boleh meminta maksimal 2 pencarian lagi bila penyebab atau tanggapan perusahaan belum jelas), lalu menalar akar masalah dari ringkasan kasus, sumber berita, dan SOP, membedakan fakta dari dugaan, lalu mengusulkan tindakan penyelesaian (tiket ke tim pemilik masalah, notifikasi ke pelanggan atau manajemen) lengkap dengan langkah, PIC, target waktu, dan kriteria selesai. Semua tindakan menunggu persetujuan manusia.
 
 **Cadangan Google News:** bila Google Search di Gemini kena batas kuota, OpsPilot mengambil artikel terbaru dari Google News RSS (gratis, tanpa API key), memberi setiap artikel ID (A1, A2, ...), lalu AI (Gemini atau Groq) mengelompokkan masalah yang wajib merujuk ID artikel. Kode membuang temuan yang merujuk artikel yang tidak ada. Mode sumber selalu ditampilkan di hasil riset.
 

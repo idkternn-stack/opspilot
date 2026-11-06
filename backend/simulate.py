@@ -30,7 +30,7 @@ def simulate_issue(research_id, issue_id, engine):
         company = rec["result"]["company"].get("name") or rec["company"]
         problem = (issue.get("problem") or issue["title"]).strip().rstrip(".")
         alert = {"id": f"case:{research_id}:{issue_id}", "type": "case_report", "title": f"{problem} ({company})",
-                 "detail": {"company": company, "simulation": {
+                 "detail": {"company": company, "company_query": rec["company"], "simulation": {
                                 "company": company, "case": issue["title"], "case_date": issue["date"], "problem": problem,
                                 "case_category": issue.get("category_label", ""),
                                 "public_sources": [s["domain"] or s["title"] for s in issue["sources"]][:3]},

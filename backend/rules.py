@@ -372,6 +372,10 @@ def diagnose(alert, ev):
         team, customers = _case_team(case)
         out["akar_masalah"] = case.get("summary") or case.get("title") or "-"
         out["bukti"].append({"klaim": case.get("summary") or case.get("title") or "-", "ref": eid("case")})
+        related = ev.rows("news") or ev.rows("news_wide")
+        if related:
+            out["bukti"].append({"klaim": f"Berita terkait terbaru: \"{related[0]['judul']}\" ({related[0]['media']})",
+                                 "ref": eid("news") if ev.rows("news") else eid("news_wide")})
         out["dampak"] = case.get("impact") or ""
         team_steps, team_goal = TEAM_STEPS.get(team, (["Verifikasi fakta kasus dengan tim internal",
                                                         "Tetapkan langkah perbaikan dan PIC", "Laporkan progres ke manajemen"],

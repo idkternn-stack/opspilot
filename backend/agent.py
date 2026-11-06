@@ -40,7 +40,8 @@ Aturan:
   (IT/Product untuk aplikasi, Logistik untuk kurir, Quality Control untuk produk, IT Security untuk keamanan data,
   Customer Service untuk layanan) dan notifikasi ke pelanggan atau Customer Service.
 - Tipe case_report adalah masalah NYATA perusahaan dari sumber berita publik (judul anomali = masalah aslinya).
-  Tidak ada data internal perusahaan: buktinya ringkasan kasus dan sumber (E1) serta SOP. Jelaskan akar masalah
+  Tidak ada data internal perusahaan: buktinya ringkasan kasus dan sumber (E1), berita tambahan dari Google News,
+  dan SOP. Pakai berita tambahan hanya bila judulnya jelas membahas kasus yang sama. Jelaskan akar masalah
   sejauh yang didukung sumber, bedakan fakta terkonfirmasi dari dugaan, dan jangan mengarang angka atau penyebab.
   Lalu usulkan tiket dan notifikasi ke tim yang tepat (mis. Finance & Payment, IT, IT Security, Legal & Compliance,
   Customer Service, Logistik, Quality Control, Komunikasi Korporat). Setiap tindakan harus menyelesaikan masalah itu
@@ -66,6 +67,7 @@ ACTIONS_DOC = """Tindakan yang tersedia (semua menunggu persetujuan manusia):
 RESPONSE_DOC = """Bentuk JSON jawaban:
 {"rencana": ["langkah penalaran singkat", "..."],
  "query_tambahan": [{"alasan": "...", "sql": "SELECT ..."}],
+ "berita_tambahan": [{"alasan": "...", "query": "kata kunci Google News"}],
  "akar_masalah": "1-2 kalimat",
  "bukti": [{"klaim": "fakta dengan angka dari bukti", "ref": ["E1"]}],
  "sop": ["nama_file_sop.md"],
@@ -187,13 +189,21 @@ def _summary(result, labels, verification, mode_note=""):
 
 
 def _prompt(alert, ev, final=False, repair=None):
+    case = alert.get("type") == "case_report"
     parts = ["ANOMALI:\n" + json.dumps(alert, ensure_ascii=False),
-             "BUKTI (dari tool):\n" + json.dumps(ev.for_prompt(), ensure_ascii=False, default=str),
-             ACTIONS_DOC, "Skema database untuk query_tambahan (hanya SELECT): " + SCHEMA, RESPONSE_DOC]
+             "BUKTI (dari tool):\n" + json.dumps(ev.for_prompt(), ensure_ascii=False, default=str), ACTIONS_DOC]
+    if not case:
+        parts.append("Skema database untuk query_tambahan (hanya SELECT): " + SCHEMA)
+    parts.append(RESPONSE_DOC)
+    extra = "berita_tambahan" if case else "query_tambahan"
     if final:
-        parts.append("Ini putaran terakhir: query_tambahan WAJIB kosong. Simpulkan dari bukti yang ada.")
+        parts.append(f"Ini putaran terakhir: query_tambahan dan berita_tambahan WAJIB kosong. Simpulkan dari bukti yang ada.")
+    elif case:
+        parts.append("Ini kasus nyata tanpa data internal: query_tambahan WAJIB kosong. Isi berita_tambahan (maksimal 2 kueri "
+                     "Google News, sertakan nama perusahaan) HANYA bila penyebab, tanggapan perusahaan, atau perkembangan "
+                     "kasus belum jelas dari bukti; selain itu kosongkan.")
     else:
-        parts.append(f"Isi query_tambahan (maksimal 2) HANYA bila bukti belum cukup; selain itu kosongkan.")
+        parts.append(f"Isi {extra} (maksimal 2) HANYA bila bukti belum cukup; selain itu kosongkan. berita_tambahan kosongkan.")
     if repair:
         parts.append("Verifikasi kode menemukan klaim yang angkanya tidak ada di bukti yang dirujuk:\n"
                      + json.dumps(repair, ensure_ascii=False)
@@ -287,13 +297,19 @@ def investigate(alert, sink=None, client=None):
         sink.event("status", {"text": "Menalar akar masalah dari bukti."})
         result, model = _ask(alert, ev, sink, final=config.MAX_EXTRA_ROUNDS <= 0)
         calls += 1
-        extra = [q for q in (result.get("query_tambahan") or []) if isinstance(q, dict) and q.get("sql")][:2]
-        if extra and config.MAX_EXTRA_ROUNDS > 0:
+        case = alert.get("type") == "case_report"
+        extra = [q for q in (result.get("query_tambahan") or []) if isinstance(q, dict) and q.get("sql")][:2] if not case else []
+        news_q = [q for q in (result.get("berita_tambahan") or []) if isinstance(q, dict) and q.get("query")][:2] if case else []
+        if (extra or news_q) and config.MAX_EXTRA_ROUNDS > 0:
             if result.get("rencana"):
                 sink.event("thought", {"text": "Rencana awal:\n" + "\n".join(f"- {r}" for r in result["rencana"])})
             for i, q in enumerate(extra, 1):
                 sink.event("thought", {"text": f"Butuh data tambahan: {q.get('alasan', '')}"})
                 ev.run(f"extra{i}", q.get("alasan") or f"Query tambahan {i}", "run_sql_readonly", {"query": q["sql"]})
+            for i, q in enumerate(news_q, 1):
+                sink.event("thought", {"text": f"Butuh berita tambahan: {q.get('alasan', '')}"})
+                ev.run(f"news_extra{i}", q.get("alasan") or f"Berita tambahan {i}", "search_news",
+                       {"query": str(q["query"])[:150], "limit": 6})
             result, model = _ask(alert, ev, sink, final=True)
             calls += 1
     except llm.LLMUnavailable as e:

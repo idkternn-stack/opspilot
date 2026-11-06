@@ -1,6 +1,6 @@
 """Tool yang bisa dipanggil agent.
 
-Tool baca (langsung dijalankan): run_sql_readonly, search_sop, estimate_loss.
+Tool baca (langsung dijalankan): run_sql_readonly, search_sop, estimate_loss, search_news.
 Tool aksi (wajib disetujui manusia): create_ticket, send_notification, transfer_stock, pause_promo, refund_payments.
 Tool aksi divalidasi dua kali: saat diusulkan agent dan saat disetujui manusia.
 """
@@ -11,7 +11,7 @@ import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from . import config, db
+from . import config, db, news
 from .detect import BASELINE_GAP_DAYS, RECENT_DAYS
 
 FORBIDDEN_SQL = re.compile(
@@ -249,5 +249,11 @@ def execute_action(tool, args):
     raise ActionError(f"Tool aksi tidak dikenal: {tool}")
 
 
-READ_TOOLS = {"run_sql_readonly": run_sql_readonly, "search_sop": search_sop, "estimate_loss": estimate_loss}
+def search_news(query: str, limit: int = 8):
+    """Mencari berita publik terbaru (Google News RSS) untuk mendalami kasus nyata."""
+    return news.search(query, limit=int(limit))
+
+
+READ_TOOLS = {"run_sql_readonly": run_sql_readonly, "search_sop": search_sop, "estimate_loss": estimate_loss,
+              "search_news": search_news}
 ACTION_TOOLS = ("create_ticket", "send_notification", "transfer_stock", "pause_promo", "refund_payments")

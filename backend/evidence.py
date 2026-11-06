@@ -279,6 +279,15 @@ def gather(alert, sink, today=None):
                {"judul": case.get("title"), "tanggal": case.get("date"), "kategori": case.get("category"),
                 "ringkasan": case.get("summary"), "dampak_operasional": case.get("impact"),
                 "mitigasi_awal": case.get("mitigation"), "sumber": case.get("sources")})
+        company = d.get("company_query") or d.get("company") or ""
+        from .news import keywords
+        words = keywords((d.get("simulation") or {}).get("problem") or case.get("title", ""), 5)
+        prefix = f'"{company}" ' if company else ""
+        found = ev.run("news", "Berita tambahan tentang kasus ini (Google News)", "search_news",
+                       {"query": (prefix + " ".join(words)).strip(), "limit": 8})
+        if found == [] and len(words) > 2:  # terlalu sempit: perluas dengan kata kunci lebih sedikit
+            ev.run("news_wide", "Berita tambahan (pencarian diperluas)", "search_news",
+                   {"query": (prefix + " ".join(words[:2])).strip(), "limit": 8})
         sop_query = f"{case.get('category', '')} {case.get('title', '')} {case.get('summary', '')} eskalasi"
 
     ev.run("sop", "Prosedur yang relevan (RAG atas SOP)", "search_sop", {"query": sop_query, "k": 2})

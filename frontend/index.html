@@ -59,18 +59,8 @@ input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
 <body>
 <main>
   <h1>OpsPilot</h1>
-  <p class="sub">Agent yang memantau data operasional, menyelidiki anomali, dan mengusulkan tindakan. Setiap aksi menunggu persetujuanmu.</p>
-
-  <div class="card row" id="controls">
-    <div>
-      <label class="switch"><input type="checkbox" id="autopilot" aria-describedby="apText"> Autopilot</label>
-      <div class="small" id="apText">Memuat…</div>
-    </div>
-    <div class="row left">
-      <button class="ghost" id="btnCheck">Cek sekarang</button>
-      <button class="ghost" id="btnReset">Reset</button>
-    </div>
-  </div>
+  <p class="sub">Agent yang mencari masalah operasional terbaru perusahaan nyata, menganalisis akar masalahnya, dan mengusulkan solusi. Setiap aksi menunggu persetujuanmu.</p>
+  <p class="small" id="aiText">Memuat…</p>
 
   <form class="card" id="researchForm">
     <label for="company" class="tl-name">Riset perusahaan nyata</label>
@@ -92,7 +82,7 @@ input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
     </section>
     <section aria-live="polite" aria-labelledby="hRun">
       <h2 id="hRun">Detail</h2>
-      <div id="run"><div class="card empty">Pilih anomali untuk melihat investigasinya. Saat autopilot aktif, anomali baru diinvestigasi otomatis dan progresnya tampil di sini.</div></div>
+      <div id="run"><div class="card empty">Cari masalah perusahaan di atas, lalu klik Analisis di OpsPilot. Progres analisis agent tampil di sini.</div></div>
     </section>
   </div>
   <div id="toast" role="status" hidden></div>
@@ -130,10 +120,7 @@ async function refreshState() {
   const st = await api('/api/state');
   S.alerts = st.alerts;
   const ap = st.autopilot;
-  $('#autopilot').checked = ap.enabled;
-  const mins = Math.round(ap.interval_s / 60);
-  $('#apText').innerHTML = (ap.enabled ? `Aktif: memantau data tiap ${mins} menit dan menginvestigasi anomali baru otomatis.` : 'Nonaktif: investigasi hanya berjalan saat kamu menekan tombol.')
-    + ` Cek terakhir ${time(ap.last_check)}. AI: ${esc((st.llm || []).filter(p => p.configured).map(p => `${p.provider} (${p.models.join(', ')}; maks ${p.rpm}/menit)`).join(' → ') || 'belum ada API key')}.`
+  $('#aiText').innerHTML = `AI: ${esc((st.llm || []).filter(p => p.configured).map(p => `${p.provider} (${p.models.join(', ')}; maks ${p.rpm}/menit)`).join(' → ') || 'belum ada API key')}.`
     + (ap.current_run ? ' <span class="spinner"></span>Agent sedang bekerja.' : '');
   renderAlerts(st.alerts);
   renderHistory(st.runs);
@@ -381,15 +368,6 @@ $('#researchForm').onsubmit = async e => {
   }
   catch (err) { toast(err.message); }
   btn.disabled = false;
-};
-
-// ---------------------------------------------------------------- kontrol
-$('#autopilot').onchange = async e => { try { await api('/api/autopilot', {enabled: e.target.checked}); refreshState(); } catch (err) { toast(err.message); } };
-$('#btnCheck').onclick = async () => { try { const r = await api('/api/check', {}); if (!r.new_alerts.length) toast('Tidak ada anomali baru.'); refreshState(); } catch (e) { toast(e.message); } };
-$('#btnReset').onclick = async () => {
-  if (!confirm('Kosongkan semua anomali dan riwayat investigasi? Riwayat riset dan rekaman tetap disimpan.')) return;
-  try { await api('/api/reset', {}); S = {view:'run', selected:null, userPicked:false, run:null, research:null, events:[], lastId:0, alerts:[]}; $('#run').innerHTML = '<div class="card empty">Anomali sudah dikosongkan. Mulai lagi dari riset perusahaan.</div>'; refreshState(); }
-  catch (e) { toast(e.message); }
 };
 
 async function loop() {

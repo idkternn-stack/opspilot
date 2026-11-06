@@ -54,5 +54,5 @@ RULES_FALLBACK = os.environ.get("OPSPILOT_RULES_FALLBACK", "1") != "0" # mode ta
 RESEARCH_CACHE_HOURS = _int("OPSPILOT_RESEARCH_CACHE_HOURS", "24")
 
 # ---------------------------------------------------------------- Autopilot
-AUTOPILOT = os.environ.get("OPSPILOT_AUTOPILOT", "1") != "0"
+AUTOPILOT = os.environ.get("OPSPILOT_AUTOPILOT", "0") == "1"  # monitor data toko sintetis (nonaktif di alur utama)
 MONITOR_INTERVAL_S = _int("OPSPILOT_MONITOR_INTERVAL", "120")
