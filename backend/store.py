@@ -331,3 +331,63 @@ def find_cached_research(company, hours):
     rows = _read("SELECT id FROM research WHERE lower(company) = lower(?) AND status = 'done' AND created_at >= ? "
                  "ORDER BY created_at DESC LIMIT 1", (company, since))
     return rows[0]["id"] if rows else None
+
+
+# -------------------------------------------------------------------- hapus riwayat
+class DeleteError(ValueError):
+    """Data tidak bisa dihapus (misalnya masih berjalan)."""
+
+
+def delete_runs(run_ids=None):
+    """Menghapus investigasi (langkah, usulan, run). Anomali yang tidak punya investigasi lagi ikut dihapus,
+    sehingga temuan riset asalnya bisa dianalisis ulang. Investigasi yang masih berjalan tidak bisa dihapus."""
+    with db.APP_WRITE_LOCK:
+        con = db.app()
+        try:
+            if run_ids is None:
+                rows = con.execute("SELECT id, alert_id, status FROM runs").fetchall()
+            else:
+                marks = ",".join("?" * len(run_ids)) or "''"
+                rows = con.execute(f"SELECT id, alert_id, status FROM runs WHERE id IN ({marks})", list(run_ids)).fetchall()
+                if not rows:
+                    raise DeleteError("Investigasi tidak ditemukan.")
+            busy = [r for r in rows if r["status"] in ACTIVE_RUN]
+            if busy and run_ids is not None:
+                raise DeleteError("Investigasi yang masih berjalan tidak bisa dihapus. Tunggu sampai selesai.")
+            done = [r for r in rows if r["status"] not in ACTIVE_RUN]
+            for r in done:
+                con.execute("DELETE FROM events WHERE run_id = ?", (r["id"],))
+                con.execute("DELETE FROM proposals WHERE run_id = ?", (r["id"],))
+                con.execute("DELETE FROM runs WHERE id = ?", (r["id"],))
+            for alert_id in {r["alert_id"] for r in done}:
+                if not con.execute("SELECT 1 FROM runs WHERE alert_id = ? LIMIT 1", (alert_id,)).fetchone():
+                    con.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
+            con.commit()
+        finally:
+            con.close()
+    return {"deleted": len(done), "skipped_running": len(busy)}
+
+
+def delete_research(research_ids=None):
+    """Menghapus riwayat riset beserta langkahnya. Riset yang masih berjalan tidak bisa dihapus."""
+    with db.APP_WRITE_LOCK:
+        con = db.app()
+        try:
+            if research_ids is None:
+                rows = con.execute("SELECT id, status FROM research").fetchall()
+            else:
+                marks = ",".join("?" * len(research_ids)) or "''"
+                rows = con.execute(f"SELECT id, status FROM research WHERE id IN ({marks})", list(research_ids)).fetchall()
+                if not rows:
+                    raise DeleteError("Riset tidak ditemukan.")
+            busy = [r for r in rows if r["status"] in ACTIVE_RUN]
+            if busy and research_ids is not None:
+                raise DeleteError("Riset yang masih berjalan tidak bisa dihapus. Tunggu sampai selesai.")
+            done = [r for r in rows if r["status"] not in ACTIVE_RUN]
+            for r in done:
+                con.execute("DELETE FROM events WHERE run_id = ?", (r["id"],))
+                con.execute("DELETE FROM research WHERE id = ?", (r["id"],))
+            con.commit()
+        finally:
+            con.close()
+    return {"deleted": len(done), "skipped_running": len(busy)}

@@ -295,6 +295,24 @@ def main():
         check(not any(e["kind"] == "tool" and e["data"]["name"] == "run_sql_readonly" for e in case_run["events"]),
               "kasus nyata tidak memakai query SQL ke data toko")
 
+        print("Hapus riwayat")
+        before_runs = len(store.list_runs(100))
+        out = store.delete_runs([info["run_id"]])
+        check(out["deleted"] == 1 and len(store.list_runs(100)) == before_runs - 1 and store.get_alert(info["alert_id"]) is None,
+              "hapus investigasi: run, langkah, dan anomalinya terhapus")
+        check(store.get_research(rid)["result"]["issues"][0]["simulated"] is None, "temuan riset bisa dianalisis ulang setelah dihapus")
+        store.delete_runs(None)
+        check(store.list_runs(100) == [] and store.list_alerts() == [], "hapus semua investigasi")
+        store.delete_research([rid])
+        check(store.get_research(rid) is None, "hapus satu riset")
+        store.delete_research(None)
+        check(store.list_research() == [], "hapus semua riset")
+        try:
+            store.delete_runs(["tidak-ada"])
+            check(False, "hapus ID yang tidak ada ditolak")
+        except store.DeleteError:
+            check(True, "hapus ID yang tidak ada ditolak")
+
         print("Pola pelanggan: pembayaran, keluhan, pesanan")
         llm.reset_state()
         llm.PROVIDERS["gemini"] = FakeAI("gemini", fail="kuota harian habis")

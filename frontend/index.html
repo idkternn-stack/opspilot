@@ -50,7 +50,12 @@ input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
 .sources{margin:6px 0 0;padding-left:18px;font-size:13px}.sources a{color:var(--acc);word-break:break-word}
 .pd{margin:6px 0}.steps{margin:4px 0 6px;padding-left:22px}.steps li{margin:2px 0}
 .issue p{margin:6px 0}.issue ul{margin:4px 0 6px;padding-left:20px}
-.list-item{cursor:pointer;padding:8px 0;border-bottom:1px solid var(--line)}.list-item:last-child{border-bottom:0}
+button.del{background:transparent;border:1px solid transparent;color:var(--mute);padding:0 6px;font-size:18px;line-height:1.2}
+button.del:hover,button.del:focus-visible{color:var(--warn);border-color:var(--line)}
+button.sm{font-size:13px;padding:3px 10px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.hrow{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:24px 0 10px}.hrow h2{margin:0}
+.list-item{display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--line)}.list-item:last-child{border-bottom:0}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:min(560px,calc(100% - 32px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;z-index:9}
 @keyframes pulse{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.spinner{animation:none}.switch input::after{transition:none}}
@@ -75,10 +80,10 @@ input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
     <section aria-labelledby="hAlerts">
       <h2 id="hAlerts">Anomali</h2>
       <div id="alerts"><p class="empty">Memuat…</p></div>
-      <h2>Riwayat riset</h2>
+      <div class="hrow"><h2>Riwayat riset</h2><button class="ghost sm" id="delAllResearch">Hapus semua</button></div>
       <div class="card" style="padding:4px 12px" id="researchList"></div>
-      <h2>Riwayat investigasi</h2>
-      <div class="card" style="padding:6px 10px"><table><thead><tr><th>Waktu</th><th>Anomali</th><th>Pemicu</th><th>Hasil</th></tr></thead><tbody id="history"></tbody></table></div>
+      <div class="hrow"><h2>Riwayat investigasi</h2><button class="ghost sm" id="delAllRuns">Hapus semua</button></div>
+      <div class="card" style="padding:6px 10px"><table><thead><tr><th>Waktu</th><th>Anomali</th><th>Pemicu</th><th>Hasil</th><th><span class="sr">Hapus</span></th></tr></thead><tbody id="history"></tbody></table></div>
     </section>
     <section aria-live="polite" aria-labelledby="hRun">
       <h2 id="hRun">Detail</h2>
@@ -166,8 +171,9 @@ function renderAlerts(list) {
 function renderHistory(runs) {
   $('#history').innerHTML = runs.length ? runs.map(r => {
     const res = r.status === 'done' ? (r.verified ? 'Terverifikasi' : 'Selesai') : (RUNSTATUS[r.status] || [r.status])[0];
-    return `<tr class="click" data-id="${esc(r.id)}"><td>${time(r.created_at)}</td><td>${esc(r.title || r.alert_id)}${r.mode === 'replay' ? ' <span class="pill busy">rekaman</span>' : ''}</td><td>${esc(TRIGGER[r.trigger] || r.trigger)}</td><td>${esc(res)}${r.duration_s ? `<div class="small">${r.duration_s} dtk, ${r.steps ?? '-'} panggilan AI</div>` : ''}</td></tr>`;
-  }).join('') : '<tr><td colspan="4" class="small">Belum ada investigasi.</td></tr>';
+    return `<tr class="click" data-id="${esc(r.id)}"><td>${time(r.created_at)}</td><td>${esc(r.title || r.alert_id)}${r.mode === 'replay' ? ' <span class="pill busy">rekaman</span>' : ''}</td><td>${esc(TRIGGER[r.trigger] || r.trigger)}</td><td>${esc(res)}${r.duration_s ? `<div class="small">${r.duration_s} dtk, ${r.steps ?? '-'} panggilan AI</div>` : ''}</td><td>${r.status === 'queued' || r.status === 'running' ? '' : `<button class="del" data-del="${esc(r.id)}" title="Hapus investigasi ini" aria-label="Hapus investigasi">×</button>`}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="small">Belum ada investigasi.</td></tr>';
+  document.querySelectorAll('#history button.del').forEach(b => b.onclick = e => { e.stopPropagation(); removeRuns([b.dataset.del]); });
   document.querySelectorAll('#history tr.click').forEach(tr => tr.onclick = () => selectRun(tr.dataset.id, true));
 }
 
@@ -276,8 +282,10 @@ async function decide(id, approve) {
 function renderResearchList(list) {
   $('#researchList').innerHTML = list.length ? list.map(r => {
     const st = r.status === 'done' ? `${r.issue_count} masalah terverifikasi` : (RUNSTATUS[r.status] || [r.status])[0];
-    return `<div class="list-item" data-id="${esc(r.id)}" tabindex="0"><b>${esc(r.company_name)}</b><div class="small">${time(r.created_at)} · ${esc(st)}</div></div>`;
+    const busy = r.status === 'queued' || r.status === 'running';
+    return `<div class="list-item" data-id="${esc(r.id)}" tabindex="0"><div><b>${esc(r.company_name)}</b><div class="small">${time(r.created_at)} · ${esc(st)}</div></div>${busy ? '' : `<button class="del" data-del="${esc(r.id)}" title="Hapus riset ini" aria-label="Hapus riset ${esc(r.company_name)}">×</button>`}</div>`;
   }).join('') : '<p class="small">Belum ada riset. Ketik nama perusahaan di atas.</p>';
+  document.querySelectorAll('#researchList button.del').forEach(b => b.onclick = e => { e.stopPropagation(); removeResearch([b.dataset.del]); });
   document.querySelectorAll('#researchList .list-item').forEach(el => {
     el.onclick = () => selectResearch(el.dataset.id);
     el.onkeydown = e => { if (e.key === 'Enter') selectResearch(el.dataset.id); };
@@ -369,6 +377,35 @@ $('#researchForm').onsubmit = async e => {
   catch (err) { toast(err.message); }
   btn.disabled = false;
 };
+
+// ---------------------------------------------------------------- hapus riwayat
+function clearDetail(msg) {
+  S.view = 'run'; S.selected = null; S.run = null; S.research = null; S.events = []; S.lastId = 0; S.userPicked = true;
+  $('#run').innerHTML = `<div class="card empty">${esc(msg)}</div>`;
+}
+async function removeRuns(ids) {
+  const all = !ids;
+  if (!confirm(all ? 'Hapus semua riwayat investigasi? Anomali yang tidak punya investigasi lagi ikut dihapus, dan temuan riset bisa dianalisis ulang.'
+                   : 'Hapus investigasi ini? Bila ini satu-satunya investigasi anomali tersebut, anomalinya ikut dihapus.')) return;
+  try {
+    const r = await api('/api/runs/delete', {ids: ids || null});
+    if (S.view === 'run' && (all || (ids || []).includes(S.selected))) clearDetail('Investigasi sudah dihapus.');
+    toast(`${r.deleted} investigasi dihapus.` + (r.skipped_running ? ` ${r.skipped_running} yang masih berjalan dilewati.` : ''));
+    refreshState();
+  } catch (e) { toast(e.message); }
+}
+async function removeResearch(ids) {
+  const all = !ids;
+  if (!confirm(all ? 'Hapus semua riwayat riset? Anomali dan investigasi yang sudah dibuat tetap ada.' : 'Hapus riset ini? Anomali dan investigasi yang sudah dibuat tetap ada.')) return;
+  try {
+    const r = await api('/api/research/delete', {ids: ids || null});
+    if (S.view === 'research' && (all || (ids || []).includes(S.selected))) clearDetail('Riset sudah dihapus.');
+    toast(`${r.deleted} riset dihapus.` + (r.skipped_running ? ` ${r.skipped_running} yang masih berjalan dilewati.` : ''));
+    refreshState();
+  } catch (e) { toast(e.message); }
+}
+$('#delAllRuns').onclick = () => removeRuns(null);
+$('#delAllResearch').onclick = () => removeResearch(null);
 
 async function loop() {
   try { await refreshState(); } catch (e) { $('#alerts').innerHTML = `<div class="banner err">${esc(e.message)}</div>`; }

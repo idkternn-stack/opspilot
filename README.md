@@ -17,6 +17,7 @@ OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot m
 | Usulan tindakan lengkap | Setiap usulan memuat alasan (merujuk ID bukti), 2-5 langkah penyelesaian, PIC, target waktu sesuai prioritas, dan kriteria masalah dianggap selesai |
 | Progres langsung | Setiap langkah agent tampil di UI saat terjadi |
 | Jejak audit | Semua investigasi, langkah, usulan, dan keputusan tersimpan di database terpisah |
+| Hapus riwayat | Riwayat riset dan investigasi bisa dihapus per item atau semuanya; temuan yang investigasinya dihapus bisa dianalisis ulang |
 | Mode rekaman | Bila Gemini sedang sibuk saat demo, investigasi sebelumnya bisa diputar ulang dengan label jelas "rekaman" |
 | Riset perusahaan nyata | Ketik nama perusahaan apa pun; OpsPilot mencari masalah operasional terbarunya lewat Google Search, memverifikasi sumber, menilai dampak, dan merujuk SOP |
 | Analisis kasus nyata | Temuan riset dijadikan anomali yang sama persis dengan masalah aslinya, lalu agent menganalisis dan mengusulkan solusinya |
@@ -138,6 +139,8 @@ Hasil evaluasi tersimpan di `eval/results/` dalam format Markdown dan JSON.
 | GET | `/api/research/{id}?after=n` | Hasil riset dan langkah baru |
 | POST | `/api/research/{id}/simulate` | Simulasikan satu temuan `{"issue_id": 1}` |
 | POST | `/api/reset` | Kembalikan data demo ke kondisi awal |
+| POST | `/api/runs/delete` | Hapus investigasi (`{"ids": [...]}`, kosong = semua) |
+| POST | `/api/research/delete` | Hapus riwayat riset (`{"ids": [...]}`, kosong = semua) |
 
 ## Struktur
 

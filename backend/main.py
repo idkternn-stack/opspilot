@@ -1,6 +1,7 @@
 """Server FastAPI: API untuk UI dan penyaji frontend."""
 import os
 import threading
+from typing import List, Optional
 import webbrowser
 from contextlib import asynccontextmanager
 
@@ -148,6 +149,26 @@ def reset():
     scenarios.build(config.BUSINESS_DB_PATH, catalog=None if cat.get("key") == "default" else cat)
     store.reset()
     return {"new_alerts": engine.check_now()}
+
+
+class DeleteIn(BaseModel):
+    ids: Optional[List[str]] = None  # kosong/None = hapus semua
+
+
+@app.post("/api/runs/delete")
+def delete_runs(body: DeleteIn):
+    try:
+        return store.delete_runs(body.ids or None)
+    except store.DeleteError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/research/delete")
+def delete_research(body: DeleteIn):
+    try:
+        return store.delete_research(body.ids or None)
+    except store.DeleteError as e:
+        raise HTTPException(409, str(e))
 
 
 app.mount("/", StaticFiles(directory=config.FRONTEND_DIR, html=True), name="ui")
