@@ -20,6 +20,27 @@ MAX_ROWS = 50
 PRIORITIES = ("HIGH", "MEDIUM", "LOW")
 
 
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+PHONE = re.compile(r"(?<![\w.])(?:\+\d{1,3}[\s-]?(?:\(\d{1,4}\)[\s-]?)?\d{2,4}(?:[\s-]?\d{2,4}){1,3}"
+                   r"|0[2-9]\d{1,3}[\s-]?\d{3,4}[\s-]?\d{3,5}|\(0\d{1,3}\)\s?\d{3,4}[\s-]?\d{3,5})(?![\w.])")
+SIMULATED_NOTE = "simulasi: dicatat di OpsPilot, tidak dikirim ke luar"
+
+
+def _role_from_email(addr):
+    local = re.sub(r"[._+-]+", " ", addr.split("@", 1)[0]).strip()
+    return ("Tim " + local.title()) if local else "Tim terkait"
+
+
+def scrub_contacts(text, recipient=False):
+    """Membuang alamat email dan nomor telepon karangan AI. Penerima ditulis sebagai tim/jabatan."""
+    text = str(text or "")
+    if recipient:
+        text = EMAIL.sub(lambda m: _role_from_email(m.group(0)), text)
+    else:
+        text = EMAIL.sub("tim terkait", text)
+    return re.sub(r"\s{2,}", " ", PHONE.sub("kontak tim terkait", text)).strip()
+
+
 class ActionError(ValueError):
     """Usulan aksi tidak valid. Pesannya dikembalikan ke agent atau ditampilkan ke pengguna."""
 
@@ -132,14 +153,14 @@ def validate_action(tool, args):
             raise ActionError("priority harus HIGH, MEDIUM, atau LOW.")
         if not str(args.get("title", "")).strip():
             raise ActionError("title tiket wajib diisi.")
-        clean = {"title": str(args["title"]).strip(), "priority": prio,
-                 "description": str(args.get("description", "")).strip()}
+        clean = {"title": scrub_contacts(args["title"]), "priority": prio,
+                 "description": "\n".join(scrub_contacts(line) for line in str(args.get("description", "")).strip().split("\n"))}
         return clean, f"Buat tiket {prio}: {clean['title']}"
     if tool == "send_notification":
-        to, msg = str(args.get("to", "")).strip(), str(args.get("message", "")).strip()
+        to, msg = scrub_contacts(args.get("to", ""), recipient=True), scrub_contacts(args.get("message", ""))
         if not to or not msg:
             raise ActionError("to dan message wajib diisi.")
-        return {"to": to, "message": msg}, f"Kirim notifikasi ke {to}"
+        return {"to": to, "message": msg}, f"Notifikasi untuk {to}"
     if tool == "transfer_stock":
         pid = _int(args.get("product_id"), "product_id")
         src, dst = _int(args.get("from_store_id"), "from_store_id"), _int(args.get("to_store_id"), "to_store_id")
@@ -212,12 +233,14 @@ def execute_action(tool, args):
             cur = con.execute("INSERT INTO tickets(title, priority, description, created_at) VALUES (?,?,?,?)",
                               (args["title"], args["priority"], args["description"], _now()))
             con.commit()
-            return {"ticket_id": cur.lastrowid, "verification": f"Tiket #{cur.lastrowid} tersimpan."}
+            return {"ticket_id": cur.lastrowid, "simulated": True,
+                    "verification": f"Tiket #{cur.lastrowid} dicatat di OpsPilot ({SIMULATED_NOTE} ke sistem tiket perusahaan)."}
         if tool == "send_notification":
             cur = con.execute("INSERT INTO notifications(recipient, message, created_at) VALUES (?,?,?)",
                               (args["to"], args["message"], _now()))
             con.commit()
-            return {"notification_id": cur.lastrowid, "verification": f"Notifikasi #{cur.lastrowid} terkirim."}
+            return {"notification_id": cur.lastrowid, "simulated": True,
+                    "verification": f"Notifikasi #{cur.lastrowid} dicatat ({SIMULATED_NOTE})."}
         if tool == "transfer_stock":
             p, s, d, q = args["product_id"], args["from_store_id"], args["to_store_id"], args["qty"]
             con.execute("UPDATE inventory SET stock = stock - ? WHERE store_id = ? AND product_id = ?", (q, s, p))

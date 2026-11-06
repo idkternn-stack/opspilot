@@ -319,6 +319,14 @@ def main():
         store.remove_watch("Albert Heijn")
         check(store.list_watch() == [], "berhenti memantau")
 
+        print("Tindakan simulasi tanpa kontak karangan")
+        clean, label = tools.validate_action("send_notification", {"to": "legal_compliance@allianz.com",
+                                             "message": "Hubungi cs@allianz.com atau +62 21 5551 234 soal denda Rp5.000.000"})
+        check("@" not in clean["to"] + clean["message"] and "5551" not in clean["message"] and "5.000.000" in clean["message"]
+              and clean["to"] == "Tim Legal Compliance", "alamat email dan nomor telepon karangan AI dibuang, angka kasus tetap")
+        out = tools.execute_action("send_notification", clean)
+        check(out["simulated"] and "tidak dikirim" in out["verification"], "hasil notifikasi jujur: dicatat, tidak dikirim")
+
         print("Hapus riwayat")
         before_runs = len(store.list_runs(100))
         out = store.delete_runs([info["run_id"]])

@@ -263,9 +263,11 @@ function proposalHtml(p, canDecide) {
     if (meta) h += `<p class="pd">${meta}</p>`;
     if (dt.hasil) h += `<p class="pd"><b>Masalah dianggap selesai bila:</b> ${esc(dt.hasil)}</p>`;
   }
+  const logged = p.tool === 'create_ticket' || p.tool === 'send_notification';
+  if (logged) h += `<p class="small">Simulasi: ${p.tool === 'create_ticket' ? 'tiket' : 'notifikasi'} ini dicatat di OpsPilot dan tidak dikirim ke perusahaan atau pihak luar.</p>`;
   h += `<details><summary>parameter teknis</summary><pre>${js(p.args)}</pre></details>`;
   if (p.result) h += `<div class="small" style="margin-top:6px">${esc(p.result.verification || p.result.error || '')}</div>`;
-  if (p.status === 'pending') h += `<div class="row left" style="margin-top:8px"><button ${canDecide ? '' : 'disabled'} onclick="decide(${p.id},true)">Setujui dan jalankan</button><button class="ghost" ${canDecide ? '' : 'disabled'} onclick="decide(${p.id},false)">Tolak</button></div>`;
+  if (p.status === 'pending') h += `<div class="row left" style="margin-top:8px"><button ${canDecide ? '' : 'disabled'} onclick="decide(${p.id},true)">${logged ? 'Setujui dan catat' : 'Setujui dan jalankan'}</button><button class="ghost" ${canDecide ? '' : 'disabled'} onclick="decide(${p.id},false)">Tolak</button></div>`;
   return h + '</div>';
 }
 

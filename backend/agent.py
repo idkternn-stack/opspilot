@@ -46,6 +46,8 @@ Aturan:
   Lalu usulkan tiket dan notifikasi ke tim yang tepat (mis. Finance & Payment, IT, IT Security, Legal & Compliance,
   Customer Service, Logistik, Quality Control, Komunikasi Korporat). Setiap tindakan harus menyelesaikan masalah itu
   secara spesifik: sebut pihak terdampak, angka atau objek dari kasus, dan langkah yang bisa langsung dikerjakan.
+- Penerima notifikasi, PIC, dan isi tiket ditulis sebagai tim atau jabatan (mis. "Tim Legal & Compliance",
+  "Customer Service"). JANGAN pernah menulis alamat email, nomor telepon, atau nama orang yang tidak ada di bukti.
 - Tulis dalam Bahasa Indonesia. Balas HANYA JSON valid."""
 
 SCHEMA = """stores(id, name, city); products(id, name, category, price, cost, base_qty);
@@ -254,8 +256,10 @@ def _detail(tool, action, args):
     target = (str(action.get("target_waktu") or "").strip() or base["target_waktu"]
               or TARGET_BY_PRIORITY.get(str(args.get("priority", "")).upper(), "3 hari"))
     refs = [r for r in (action.get("ref") or []) if isinstance(r, str)] or sorted(set(re.findall(r"\bE\d+\b", str(action.get("alasan", "")))))
-    return {"alasan": str(action.get("alasan", "")).strip(), "ref": refs, "langkah": steps, "pic": pic,
-            "target_waktu": target, "hasil": str(action.get("hasil") or "").strip() or base["hasil"],
+    clean = tools.scrub_contacts
+    return {"alasan": clean(action.get("alasan", "")), "ref": refs, "langkah": [clean(x) for x in steps],
+            "pic": clean(pic, recipient=True), "target_waktu": target,
+            "hasil": clean(action.get("hasil") or "") or base["hasil"],
             "langkah_dari_ai": bool(action.get("langkah"))}
 
 

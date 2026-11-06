@@ -14,6 +14,7 @@ OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot m
 | Multi-penyedia AI | Gemini (utama) dan Groq (cadangan opsional), pembatas permintaan per menit, pindah otomatis saat kuota habis |
 | Mode tanpa AI | Bila semua model AI habis kuota, diagnosis berbasis aturan tetap berjalan dengan label jelas |
 | Aksi nyata dengan persetujuan | `transfer_stock`, `pause_promo`, dan `refund_payments` mengubah database setelah disetujui, lalu hasilnya diverifikasi |
+| Tindakan simulasi yang jujur | Tiket dan notifikasi untuk kasus nyata dicatat di OpsPilot (tidak dikirim ke perusahaan atau pihak luar) dan ditandai jelas sebagai simulasi; penerima ditulis sebagai tim/jabatan, alamat email dan nomor telepon karangan AI dibuang otomatis |
 | Usulan tindakan lengkap | Setiap usulan memuat alasan (merujuk ID bukti), 2-5 langkah penyelesaian, PIC, target waktu sesuai prioritas, dan kriteria masalah dianggap selesai |
 | Progres langsung | Setiap langkah agent tampil di UI saat terjadi |
 | Jejak audit | Semua investigasi, langkah, usulan, dan keputusan tersimpan di database terpisah |
