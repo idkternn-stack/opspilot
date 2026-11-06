@@ -65,11 +65,10 @@ input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
     <div>
       <label class="switch"><input type="checkbox" id="autopilot" aria-describedby="apText"> Autopilot</label>
       <div class="small" id="apText">Memuat…</div>
-      <div class="small" id="catalogText"></div>
     </div>
     <div class="row left">
       <button class="ghost" id="btnCheck">Cek sekarang</button>
-      <button class="ghost" id="btnReset">Reset data demo</button>
+      <button class="ghost" id="btnReset">Reset</button>
     </div>
   </div>
 
@@ -79,7 +78,7 @@ input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
       <input type="text" id="company" maxlength="80" autocomplete="off" placeholder="Ketik nama perusahaan, misalnya Alfamart atau Albert Heijn" required>
       <button type="submit" id="btnResearch">Cari masalah terbaru</button>
     </div>
-    <div class="small" style="margin-top:6px">Langkah 1: cari masalah terbaru perusahaan nyata. Langkah 2: simulasikan temuannya di toko demo. Langkah 3: agent menyelidiki dan mengusulkan solusi.<br>OpsPilot mencari berita publik terbaru lewat Google Search. Temuan tanpa sumber dibuang, dan setiap temuan bisa disimulasikan di data toko demo.</div>
+    <div class="small" style="margin-top:6px">Langkah 1: cari masalah terbaru perusahaan nyata. Langkah 2: klik <b>Analisis di OpsPilot</b> pada temuan. Langkah 3: agent menganalisis masalah itu dan mengusulkan solusinya.<br>OpsPilot mencari berita publik terbaru lewat Google Search. Temuan tanpa sumber dibuang.</div>
   </form>
 
   <div class="layout">
@@ -109,7 +108,7 @@ const STATUS = {open:['Baru',''], queued:['Antre','busy'], investigating:['Diinv
 const RUNSTATUS = {queued:['Antre','busy'], running:['Berjalan','busy'], done:['Selesai','ok'], error:['Gagal','warn']};
 const pill = ([t, c]) => `<span class="pill ${c}">${esc(t)}</span>`;
 
-const TRIGGER = {autopilot:'Autopilot', manual:'Manual', simulasi:'Simulasi kasus'};
+const TRIGGER = {autopilot:'Autopilot', manual:'Manual', simulasi:'Kasus nyata'};
 const RISK = {tinggi:['Risiko tinggi','warn'], sedang:['Risiko sedang','busy'], rendah:['Risiko rendah','ok']};
 let S = {view: 'run', selected: null, userPicked: false, run: null, research: null, events: [], lastId: 0, alerts: []};
 
@@ -136,10 +135,6 @@ async function refreshState() {
   $('#apText').innerHTML = (ap.enabled ? `Aktif: memantau data tiap ${mins} menit dan menginvestigasi anomali baru otomatis.` : 'Nonaktif: investigasi hanya berjalan saat kamu menekan tombol.')
     + ` Cek terakhir ${time(ap.last_check)}. AI: ${esc((st.llm || []).filter(p => p.configured).map(p => `${p.provider} (${p.models.join(', ')}; maks ${p.rpm}/menit)`).join(' → ') || 'belum ada API key')}.`
     + (ap.current_run ? ' <span class="spinner"></span>Agent sedang bekerja.' : '');
-  const cat = st.catalog || {};
-  $('#catalogText').innerHTML = cat.key && cat.key !== 'default'
-    ? `Toko demo: <b>${esc(cat.company)}</b> (katalog simulasi: nama produk dan gerai khas perusahaan, harga dan angka perkiraan).`
-    : 'Toko demo: toko sembako default. Saat kamu menyimulasikan temuan riset, toko demo diganti dengan katalog perusahaan itu.';
   renderAlerts(st.alerts);
   renderHistory(st.runs);
   renderResearchList(st.research || []);
@@ -151,7 +146,7 @@ async function refreshState() {
 
 function renderAlerts(list) {
   const box = $('#alerts');
-  if (!list.length) { box.innerHTML = '<div class="card empty">Belum ada anomali. Mulai dari <b>Riset perusahaan nyata</b> di atas, lalu klik <b>Simulasikan di OpsPilot</b> pada salah satu temuan. Agent akan menyelesaikan masalahnya di sini.</div>'; return; }
+  if (!list.length) { box.innerHTML = '<div class="card empty">Belum ada anomali. Mulai dari <b>Riset perusahaan nyata</b> di atas, lalu klik <b>Analisis di OpsPilot</b> pada salah satu temuan. Agent akan menyelesaikan masalahnya di sini.</div>'; return; }
   box.innerHTML = '';
   list.forEach(a => {
     const busy = a.status === 'queued' || a.status === 'investigating';
@@ -159,7 +154,7 @@ function renderAlerts(list) {
     card.className = 'card alert' + (S.view === 'run' && S.run && S.run.alert_id === a.id ? ' sel' : '');
     card.tabIndex = 0;
     const sim = a.detail && a.detail.simulation;
-    card.innerHTML = `<b>${esc(a.title)}</b>${sim && sim.detected ? `<div class="small" style="margin-top:4px">Di data toko demo: ${esc(sim.detected)}</div>` : ''}
+    card.innerHTML = `<b>${esc(a.title)}</b>${sim ? `<div class="small" style="margin-top:4px">Kasus nyata ${esc(sim.case_date || '')} · sumber: ${esc((sim.public_sources || []).join(', '))}</div>` : ''}
       <div class="row" style="margin-top:6px"><span class="small">${esc(TYPE[a.type] || a.type)}</span>${pill(STATUS[a.status] || [a.status, ''])}</div>
       <div class="row left" style="margin-top:8px"></div>`;
     const actions = card.querySelector('.row.left');
@@ -268,9 +263,7 @@ function renderRun() {
     <div class="small" style="margin-top:4px">Pemicu: ${esc(TRIGGER[r.trigger] || r.trigger)} · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik · ${r.steps} panggilan AI · ${r.tool_calls} panggilan tool` : ''}</div></div>`;
   if ((r.model || '').startsWith('aturan')) h += '<div class="banner replay">Mode tanpa AI: semua model AI sedang tidak bisa dipakai (kuota habis atau sibuk), jadi diagnosis memakai aturan berbasis bukti. Jalankan ulang investigasi saat kuota tersedia untuk penalaran AI.</div>';
   const sim = r.alert && r.alert.detail && r.alert.detail.simulation;
-  if (sim) h += r.alert.type === 'case_report'
-    ? `<div class="banner replay">Kasus nyata ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Masalah ini tidak tampak di data toko, jadi agent menalar langsung dari sumber berita dan SOP, lalu mengusulkan penyelesaiannya.</div>`
-    : `<div class="banner replay">Kasus nyata ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Masalah yang sama disimulasikan di toko demo ${esc(sim.catalog || sim.company)}${sim.detected ? `: ${esc(sim.detected)}` : ''}. Harga dan angka perkiraan, bukan data internal perusahaan.</div>`;
+  if (sim) h += `<div class="banner replay">Kasus nyata ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Agent menganalisis masalah ini dari sumber berita publik dan SOP, bukan dari data internal perusahaan.</div>`;
   if (r.mode === 'replay') h += '<div class="banner replay">Ini rekaman investigasi sebelumnya, bukan investigasi langsung. Usulan tindakan tetap divalidasi terhadap data saat ini.</div>';
   if (r.status === 'error') {
     h += `<div class="banner err">${esc(r.error)}</div><div class="row left"><button onclick="start('/api/investigate','${esc(r.alert_id)}')">Coba lagi</button>${r.has_recording ? `<button class="ghost" onclick="start('/api/replay','${esc(r.alert_id)}')">Putar rekaman</button>` : ''}</div>`;
@@ -334,11 +327,11 @@ function issueHtml(rid, i) {
   if (i.mitigation.length) h += `<b>Mitigasi:</b><ul>${i.mitigation.map(m => `<li>${esc(m)}</li>`).join('')}</ul>`;
   if (i.sop.length) h += `<div class="small">SOP dirujuk: ${esc(i.sop.join(', '))}</div>`;
   if (i.simulated) {
-    h += `<div class="row left" style="margin-top:10px"><button class="ghost" onclick="selectRun('${esc(i.simulated.run_id)}', true)">Lihat investigasi simulasi</button><span class="small">${esc(i.simulated.alert_title)}</span></div>`;
-  } else if (i.scenario && i.scenario !== 'none') {
-    h += `<div class="row left" style="margin-top:10px"><button onclick="simulateIssue('${esc(rid)}', ${i.id}, this)">Simulasikan di OpsPilot</button><span class="small">${i.problem ? `Anomali: <b>${esc(i.problem)}</b> · ` : ''}Pola: ${esc(i.scenario_label)}${i.target && i.target.product ? ` · produk: ${esc(i.target.product)}` : ''}${i.target && i.target.store ? ` · gerai: ${esc(i.target.store)}` : ''}${i.scenario_reason ? '. ' + esc(i.scenario_reason) : ''}</span></div>`;
+    h += `<div class="row left" style="margin-top:10px"><button class="ghost" onclick="selectRun('${esc(i.simulated.run_id)}', true)">Lihat analisis</button><span class="small">${esc(i.simulated.alert_title)}</span></div>`;
+  } else if (i.relevant !== false) {
+    h += `<div class="row left" style="margin-top:10px"><button onclick="simulateIssue('${esc(rid)}', ${i.id}, this)">Analisis di OpsPilot</button><span class="small">Anomali: <b>${esc(i.problem || i.title)}</b></span></div>`;
   } else {
-    h += `<div class="small" style="margin-top:8px">Tidak disimulasikan${i.scenario_reason ? ': ' + esc(i.scenario_reason) : '.'}</div>`;
+    h += `<div class="small" style="margin-top:8px">Tidak dianalisis${i.scenario_reason ? ': ' + esc(i.scenario_reason) : '.'}</div>`;
   }
   return h + '</div>';
 }
@@ -353,7 +346,7 @@ function renderResearch() {
   if (active) h += `<p class="small"><span class="spinner"></span>${r.status === 'queued' ? 'Menunggu giliran…' : 'Mencari berita, memverifikasi sumber, dan menganalisis dampak…'}</p>`;
   if (r.status === 'error') h += `<div class="banner err">${esc(r.error)}</div>`;
   if (res) {
-    h += '<div class="banner replay">Temuan berasal dari sumber publik, bukan data internal perusahaan. Simulasi memakai data toko demo.</div>';
+    h += '<div class="banner replay">Temuan berasal dari sumber berita publik, bukan data internal perusahaan.</div>';
     if (res.overall) h += `<h3>Gambaran risiko</h3><div class="card summary">${md(res.overall)}</div>`;
     h += `<h3>Temuan terverifikasi (${res.issues.length})</h3>`;
     h += res.issues.length ? res.issues.map(i => issueHtml(r.id, i)).join('') : '<p class="small">Tidak ada temuan yang didukung sumber.</p>';
@@ -364,12 +357,12 @@ function renderResearch() {
 }
 
 async function simulateIssue(rid, issueId, btn) {
-  btn.disabled = true; btn.textContent = 'Menyiapkan simulasi…';
+  btn.disabled = true; btn.textContent = 'Menyiapkan analisis…';
   try {
     const info = await api(`/api/research/${rid}/simulate`, {issue_id: issueId});
-    toast(info.catalog_switched ? `Toko demo diganti ke katalog ${info.catalog}. Anomali simulasi dibuat: ${info.alert_title}` : `Anomali simulasi dibuat: ${info.alert_title}`);
+    toast(`Anomali dibuat: ${info.alert_title}`);
     await selectRun(info.run_id, true); refreshState();
-  } catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Simulasikan di OpsPilot'; }
+  } catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Analisis di OpsPilot'; }
 }
 
 async function refreshResearch(company) {
@@ -394,8 +387,8 @@ $('#researchForm').onsubmit = async e => {
 $('#autopilot').onchange = async e => { try { await api('/api/autopilot', {enabled: e.target.checked}); refreshState(); } catch (err) { toast(err.message); } };
 $('#btnCheck').onclick = async () => { try { const r = await api('/api/check', {}); if (!r.new_alerts.length) toast('Tidak ada anomali baru.'); refreshState(); } catch (e) { toast(e.message); } };
 $('#btnReset').onclick = async () => {
-  if (!confirm('Kosongkan data demo (semua anomali simulasi dihapus, katalog toko tetap) dan hapus riwayat investigasi? Riwayat riset dan rekaman tetap disimpan.')) return;
-  try { await api('/api/reset', {}); S = {view:'run', selected:null, userPicked:false, run:null, research:null, events:[], lastId:0, alerts:[]}; $('#run').innerHTML = '<div class="card empty">Data demo sudah dikosongkan. Mulai lagi dari riset perusahaan.</div>'; refreshState(); }
+  if (!confirm('Kosongkan semua anomali dan riwayat investigasi? Riwayat riset dan rekaman tetap disimpan.')) return;
+  try { await api('/api/reset', {}); S = {view:'run', selected:null, userPicked:false, run:null, research:null, events:[], lastId:0, alerts:[]}; $('#run').innerHTML = '<div class="card empty">Anomali sudah dikosongkan. Mulai lagi dari riset perusahaan.</div>'; refreshState(); }
   catch (e) { toast(e.message); }
 };
 

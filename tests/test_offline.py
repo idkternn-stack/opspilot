@@ -256,19 +256,14 @@ def main():
         check(cached2 and rid2 == rid and llm.PROVIDERS["gemini"].calls == before, "riset ulang dalam 24 jam memakai cache")
         old_runs = len(store.list_runs(50))
         info = eng.simulate(rid, 1)
-        check(store.get_alert(info["alert_id"])["type"] == "data_gap", "simulasi membuat anomali baru beranotasi kasus")
-        check(info["alert_id"] == "gap:2", "simulasi memakai gerai yang disebut AI untuk temuan itu")
         sim_alert = store.get_alert(info["alert_id"])
-        check(sim_alert["title"].startswith("Sistem distribusi lumpuh akibat serangan siber (kasus")
-              and sim_alert["detail"]["simulation"]["detected"].startswith("Data penjualan"),
-              "judul anomali sama dengan masalah aslinya, temuan data detektor tetap dicatat")
-        cat = scenarios.current_catalog(config.BUSINESS_DB_PATH)
-        check(info["catalog_switched"] and cat["key"].startswith("ahold-delhaize") and cat["products"][0][1] == "AH Produk 1",
-              "toko demo diganti ke katalog simulasi perusahaan")
-        check([a["id"] for a in store.list_alerts()] == [info["alert_id"]], "anomali katalog lama diarsipkan, tidak tampil lagi")
+        check(sim_alert["type"] == "case_report" and sim_alert["title"].startswith("Sistem distribusi lumpuh akibat serangan siber ("),
+              "anomali = masalah asli perusahaan (judul dari inti masalah hasil analisis)")
+        check(sim_alert["detail"]["case"]["summary"].startswith("Sistem dimatikan") and sim_alert["detail"]["case"]["sources"],
+              "anomali membawa ringkasan kasus dan sumber aslinya")
         check(len(store.list_runs(50)) >= old_runs, "riwayat investigasi lama tetap tersimpan")
         wait_idle(eng)
-        check(store.get_run_row(info["run_id"])["status"] == "done", "anomali simulasi diinvestigasi agent")
+        check(store.get_run_row(info["run_id"])["status"] == "done", "agent menganalisis kasus sampai selesai")
         check(store.get_research(rid)["result"]["issues"][1]["relevant"] is False, "temuan bukan masalah operasional ditandai")
         try:
             eng.simulate(rid, 2)
@@ -284,7 +279,7 @@ def main():
         wait_idle(eng)
         case_run = store.get_run(info3["run_id"])
         check(store.get_alert(info3["alert_id"])["type"] == "case_report" and case_run["status"] == "done",
-              "masalah tanpa pola data tetap disimulasikan sebagai kasus dan diselesaikan agent")
+              "temuan relevan lain juga dianalisis agent sebagai kasus nyata")
         check(any(e["kind"] == "tool" and e["data"]["name"] == "riset_sumber_publik" for e in case_run["events"]),
               "bukti kasus diambil dari sumber berita publik")
 

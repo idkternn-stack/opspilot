@@ -15,6 +15,51 @@ TEAM_BY_CATEGORY = {"keuangan": "Finance", "regulasi": "Legal & Compliance", "re
                     "harga_promo": "Pricing Team", "penutupan_toko": "Operations Manager", "permintaan": "Merchandising"}
 
 
+CASE_TEAMS = [  # kata kunci di kasus -> tim pemilik masalah dan apakah pelanggan perlu dikabari
+    (("tagih", "bayar", "refund", "kartu kredit", "transaksi", "payment", "charge"), "Finance & Payment Operations", True),
+    (("bocor", "breach", "peretas", "hack", "siber", "akun", "penipuan", "phishing"), "IT Security", True),
+    (("kirim", "paket", "kurir", "pesanan", "delivery"), "Logistik", True),
+    (("aplikasi", "app", "website", "down", "error", "gangguan sistem", "outage"), "IT & Product Engineering", True),
+    (("recall", "ditarik", "kualitas", "rusak", "cacat", "keamanan pangan"), "Quality Control", True),
+    (("gugat", "sanksi", "denda", "regulator", "hukum", "izin", "pengadilan", "lawsuit", "fine"), "Legal & Compliance", False),
+    (("phk", "mogok", "karyawan", "pekerja", "layoff", "strike"), "HR", False),
+    (("stok", "pasokan", "langka", "supplier", "pemasok", "kosong"), "Supply Chain", True),
+    (("rugi", "utang", "keuangan", "bangkrut", "losses"), "Finance", False),
+]
+
+
+TEAM_STEPS = {
+    "Finance & Payment Operations": (["Kumpulkan transaksi yang dilaporkan (tanggal, nominal, metode bayar, ID pelanggan)",
+                                      "Cocokkan status setiap transaksi dengan bank atau payment gateway",
+                                      "Kembalikan dana pelanggan yang tertagih tanpa transaksi sah",
+                                      "Perbaiki penyebab di alur pembayaran dan pantau transaksi sejenis 7 hari"],
+                                     "Semua pelanggan terdampak menerima dananya kembali dan tidak ada kasus baru"),
+    "IT Security": (["Kunci akun atau akses yang terindikasi disalahgunakan", "Telusuri log untuk menemukan celah dan data yang terdampak",
+                     "Tutup celah keamanan dan reset kredensial terkait", "Beri tahu pengguna terdampak sesuai aturan perlindungan data"],
+                    "Celah tertutup dan seluruh pengguna terdampak sudah diberi tahu"),
+    "Logistik": (["Data ulang semua pesanan yang tertunda beserta kurirnya", "Hubungi kurir untuk status dan jadwal kirim baru",
+                  "Alihkan pesanan baru ke kurir cadangan", "Beri kompensasi ongkir untuk pesanan yang sangat terlambat"],
+                 "Pesanan tertunda terkirim dan keterlambatan kembali normal"),
+    "IT & Product Engineering": (["Reproduksi gangguan yang dilaporkan pengguna", "Perbaiki dan uji ulang sebelum rilis",
+                                  "Pasang pemantauan agar gangguan serupa terdeteksi lebih cepat", "Umumkan status perbaikan ke pengguna"],
+                                 "Layanan kembali normal dan laporan gangguan berhenti"),
+    "Quality Control": (["Hentikan penjualan batch atau produk yang bermasalah", "Uji sampel produk dan telusuri pemasoknya",
+                         "Tarik produk dari gerai dan gudang bila terbukti bermasalah", "Siapkan penggantian atau refund untuk pembeli"],
+                        "Produk bermasalah tidak lagi beredar dan pembeli terdampak tertangani"),
+    "Legal & Compliance": (["Pelajari dokumen gugatan atau keputusan regulator", "Kumpulkan bukti internal yang relevan",
+                            "Tentukan sikap hukum dan langkah kepatuhan yang diperlukan", "Laporkan rekomendasi ke direksi"],
+                           "Perusahaan punya sikap hukum resmi dan langkah kepatuhan berjalan"),
+}
+
+
+def _case_team(case):
+    text = f"{case.get('title', '')} {case.get('summary', '')}".lower()
+    for words, team, customers in CASE_TEAMS:
+        if any(w in text for w in words):
+            return team, customers
+    return TEAM_BY_CATEGORY.get(case.get("category"), "Operations Manager"), False
+
+
 def _rupiah(x):
     return f"Rp{int(round(x or 0)):,}".replace(",", ".")
 
@@ -324,19 +369,26 @@ def diagnose(alert, ev):
 
     elif t == "case_report":
         case = d.get("case") or {}
-        team = TEAM_BY_CATEGORY.get(case.get("category"), "Operations Manager")
+        team, customers = _case_team(case)
         out["akar_masalah"] = case.get("summary") or case.get("title") or "-"
         out["bukti"].append({"klaim": case.get("summary") or case.get("title") or "-", "ref": eid("case")})
         out["dampak"] = case.get("impact") or ""
-        steps = [str(m) for m in (case.get("mitigation") or [])][:5] or ["Verifikasi fakta kasus dengan tim internal",
-                                                                         "Tetapkan langkah perbaikan dan PIC", "Laporkan progres ke manajemen"]
+        team_steps, team_goal = TEAM_STEPS.get(team, (["Verifikasi fakta kasus dengan tim internal",
+                                                        "Tetapkan langkah perbaikan dan PIC", "Laporkan progres ke manajemen"],
+                                                       "Penyebab kasus ditangani dan tidak terulang"))
+        steps = [str(m) for m in (case.get("mitigation") or [])][:5] or team_steps
         out["tindakan"] += [
             {"tool": "create_ticket", "args": {"title": f"Tindak lanjut kasus: {(case.get('title') or '')[:80]}", "priority": "HIGH",
              "description": case.get("summary") or ""}, "alasan": "SOP kasus publik poin 2", "pic": team, "langkah": steps,
-             "hasil": "Penyebab kasus ditangani dan tidak terulang"},
+             "hasil": team_goal},
             {"tool": "send_notification", "args": {"to": "Manajemen dan Komunikasi Korporat",
              "message": f"Kasus publik: {case.get('title', '')}. Siapkan pernyataan resmi dan pantau perkembangan."},
              "alasan": "SOP kasus publik poin 3"}]
+        if customers:
+            out["tindakan"].append({"tool": "send_notification", "args": {"to": "Customer Service",
+                                    "message": f"Pelanggan mungkin terdampak: {case.get('title', '')}. Catat setiap laporan, "
+                                               "berikan jawaban resmi, dan teruskan ke " + team + "."},
+                                    "alasan": "SOP kasus publik poin 3"})
     else:
         out["akar_masalah"] = "Jenis anomali belum punya aturan diagnosis."
     if loss and not out["dampak"]:

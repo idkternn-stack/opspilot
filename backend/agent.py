@@ -39,12 +39,12 @@ Aturan:
 - Keluhan pelanggan dan pesanan terlambat: cari pola (kategori, kurir, gerai), lalu tiket ke tim pemilik masalah
   (IT/Product untuk aplikasi, Logistik untuk kurir, Quality Control untuk produk, IT Security untuk keamanan data,
   Customer Service untuk layanan) dan notifikasi ke pelanggan atau Customer Service.
-- Bila anomali punya detail.simulation, judul anomali adalah masalah ASLI perusahaan itu yang disimulasikan di toko
-  demo. Akar masalah harus menjelaskan masalah itu (sebut kasus aslinya satu kalimat), bukti dari data demo, dan
-  tindakan harus menyelesaikan masalah itu, bukan masalah lain.
-- Tipe case_report tidak punya data toko: buktinya sumber berita publik dan SOP. Jelaskan akar masalah dari sumber,
-  lalu usulkan tiket dan notifikasi ke tim yang tepat (Legal, Finance, IT Security, Customer Service, Operasional,
-  Komunikasi Korporat) dengan langkah penyelesaian yang konkret.
+- Tipe case_report adalah masalah NYATA perusahaan dari sumber berita publik (judul anomali = masalah aslinya).
+  Tidak ada data internal perusahaan: buktinya ringkasan kasus dan sumber (E1) serta SOP. Jelaskan akar masalah
+  sejauh yang didukung sumber, bedakan fakta terkonfirmasi dari dugaan, dan jangan mengarang angka atau penyebab.
+  Lalu usulkan tiket dan notifikasi ke tim yang tepat (mis. Finance & Payment, IT, IT Security, Legal & Compliance,
+  Customer Service, Logistik, Quality Control, Komunikasi Korporat). Setiap tindakan harus menyelesaikan masalah itu
+  secara spesifik: sebut pihak terdampak, angka atau objek dari kasus, dan langkah yang bisa langsung dikerjakan.
 - Tulis dalam Bahasa Indonesia. Balas HANYA JSON valid."""
 
 SCHEMA = """stores(id, name, city); products(id, name, category, price, cost, base_qty);

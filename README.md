@@ -19,7 +19,7 @@ OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot m
 | Jejak audit | Semua investigasi, langkah, usulan, dan keputusan tersimpan di database terpisah |
 | Mode rekaman | Bila Gemini sedang sibuk saat demo, investigasi sebelumnya bisa diputar ulang dengan label jelas "rekaman" |
 | Riset perusahaan nyata | Ketik nama perusahaan apa pun; OpsPilot mencari masalah operasional terbarunya lewat Google Search, memverifikasi sumber, menilai dampak, dan merujuk SOP |
-| Simulasi kasus nyata | Temuan riset disimulasikan di toko demo dengan judul anomali yang sama dengan masalah aslinya, lalu diselesaikan agent |
+| Analisis kasus nyata | Temuan riset dijadikan anomali yang sama persis dengan masalah aslinya, lalu agent menganalisis dan mengusulkan solusinya |
 | Evaluasi otomatis | 13 skenario dengan akar masalah diketahui; akurasi diagnosis, ketepatan aksi, keamanan, dan waktu diukur otomatis |
 
 ## Arsitektur
@@ -57,24 +57,8 @@ flowchart LR
 
 1. **Cari:** Gemini dengan Grounding with Google Search menulis temuan dalam format tetap (judul, tanggal, kategori, ringkasan).
 2. **Verifikasi (kode, bukan LLM):** setiap temuan dipetakan ke sumbernya lewat metadata grounding. Temuan tanpa sumber dibuang. Temuan yang sumbernya hanya media sosial ditandai "belum terkonfirmasi". Tanggal lebih dari 180 hari atau di masa depan ditandai.
-3. **Analisis:** dampak operasional, tingkat risiko, mitigasi sesuai SOP (RAG), jenis skenario yang paling mirip, serta produk dan gerai yang disebut di temuan. AI juga menilai relevansi: artikel opini, kisah sukses, tips, atau promo ditandai "Bukan masalah operasional perusahaan" dan tidak bisa disimulasikan.
-4. **Simulasi:** masalah yang sama diterapkan ke data toko demo, pada produk dan gerai yang paling cocok dengan temuan. Judul anomali = masalah aslinya (misalnya "Transaksi kartu kredit ditolak tetapi tetap ditagih (kasus Tokopedia)"), dan temuan detektor di data demo ditampilkan di bawahnya. Injeksi dicoba dulu di salinan database dan baru diterapkan bila detektor benar-benar menghasilkan anomali baru.
-5. **Kasus tanpa pola data:** masalah yang relevan tetapi tidak tampak di data toko (gugatan, sanksi, keuangan) tetap bisa ditangani: anomali dibuat langsung dari temuan, agent menalar dari sumber berita dan SOP, lalu mengusulkan tiket dan notifikasi ke tim yang tepat.
-
-| Pola simulasi | Contoh masalah nyata | Data yang dipakai agent |
-|---|---|---|
-| Stok habis, pemasok terlambat | kelangkaan, gangguan pasokan | `sales`, `inventory`, `deliveries` |
-| Kesalahan harga/diskon | harga terlalu murah, di bawah modal | `promotions`, `products` |
-| Permintaan naik/turun | lonjakan atau penurunan penjualan | `sales`, `inventory` |
-| Gangguan POS | transaksi tidak tercatat | `pos_sync_log`, `sales` |
-| Transaksi ditolak tetapi ditagih | tagihan ganda, dana terpotong | `payments` (status, charged, refunded) |
-| Pembayaran gagal massal | payment gateway down | `payments` |
-| Lonjakan keluhan | aplikasi error, akun dibobol, produk rusak | `complaints` |
-| Pesanan terlambat | paket tidak sampai, kurir bermasalah | `orders` |
-| Toko tutup | penutupan gerai | `store_events` |
-| Kasus dari berita | gugatan, sanksi, keuangan | sumber berita + SOP |
-
-**Katalog simulasi per perusahaan:** saat analisis riset, AI sekalian menyusun katalog simulasi (4 gerai dan 8 produk khas perusahaan, harga perkiraan dalam rupiah). Saat temuan disimulasikan, toko demo diganti ke katalog itu (anomali katalog lama diarsipkan, riwayat tetap ada), sehingga simulasi Hermès memakai produk seperti tas dan syal, bukan sembako. Bila katalog tidak tersedia, toko sembako default dipakai.
+3. **Analisis:** AI menilai relevansi (artikel opini, kisah sukses, tips, atau promo ditandai "Bukan masalah operasional perusahaan" dan tidak dianalisis), merumuskan inti masalah dalam satu kalimat, lalu menilai dampak, risiko, dan mitigasi sesuai SOP (RAG).
+4. **Analisis di OpsPilot:** temuan dijadikan anomali yang **sama dengan masalah aslinya**, misalnya "Transaksi kartu kredit ditolak, tapi tagihan tetap dibebankan (PT GoTo Gojek Tokopedia Tbk)". Agent menalar akar masalah dari ringkasan kasus, sumber berita, dan SOP, membedakan fakta dari dugaan, lalu mengusulkan tindakan penyelesaian (tiket ke tim pemilik masalah, notifikasi ke pelanggan atau manajemen) lengkap dengan langkah, PIC, target waktu, dan kriteria selesai. Semua tindakan menunggu persetujuan manusia.
 
 **Cadangan Google News:** bila Google Search di Gemini kena batas kuota, OpsPilot mengambil artikel terbaru dari Google News RSS (gratis, tanpa API key), memberi setiap artikel ID (A1, A2, ...), lalu AI (Gemini atau Groq) mengelompokkan masalah yang wajib merujuk ID artikel. Kode membuang temuan yang merujuk artikel yang tidak ada. Mode sumber selalu ditampilkan di hasil riset.
 
@@ -98,7 +82,7 @@ Temuan selalu berasal dari sumber publik, bukan data internal perusahaan. Nama p
 | `pesanan_terlambat_medan` | Satu mitra kurir membuat pesanan terlambat | Tiket Logistik + notifikasi pelanggan |
 | `toko_tutup_surabaya` | Pendapatan turun karena renovasi terjadwal | Tidak perlu tindakan korektif |
 
-Data toko demo dimulai **bersih tanpa anomali**. Alur demo: riset perusahaan nyata, simulasikan temuannya, lalu agent menyelesaikannya. Skenario di tabel ini dipakai evaluasi (dijalankan satu per satu) dan tes offline.
+Skenario di tabel ini memakai data toko sintetis dan dipakai untuk autopilot, evaluasi otomatis, dan tes offline. Alur utama demo adalah riset perusahaan nyata lalu **Analisis di OpsPilot**.
 
 ## Guardrails dan mitigasi risiko
 
