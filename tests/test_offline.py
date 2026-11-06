@@ -88,7 +88,11 @@ class FakeAI:
                 {"nomor": 1, "dampak": "Distribusi berhenti", "risiko": "tinggi", "mitigasi": ["Prosedur manual"],
                  "sop": ["sop_data_pos.md"], "skenario": "data_gap", "alasan_skenario": "Sistem mati"},
                 {"nomor": 2, "dampak": "-", "risiko": "rendah", "mitigasi": [], "sop": [], "skenario": "none",
-                 "alasan_skenario": "Tidak tampak di data toko"}]}
+                 "alasan_skenario": "Tidak tampak di data toko"}],
+                "katalog": {"toko": [{"nama": f"AH Gerai {i}", "kota": c} for i, c in
+                                     enumerate(["Amsterdam", "Rotterdam", "Utrecht", "Den Haag"], 1)],
+                            "produk": [{"nama": f"AH Produk {i}", "kategori": "Grocery", "harga": 30000 + i * 1000,
+                                        "harga_pokok": 20000, "qty_harian": 20 + i} for i in range(1, 9)]}}
         alert = json.loads(prompt.split("ANOMALI:\n", 1)[1].split("\n\nBUKTI", 1)[0])
         n = self.turn[alert["id"]] = self.turn.get(alert["id"], 0) + 1
         base = {"rencana": ["Cek stok dan pengiriman", "Cocokkan dengan SOP"], "query_tambahan": [], "sop": ["sop_stockout.md"],
@@ -241,8 +245,14 @@ def main():
         before = llm.PROVIDERS["gemini"].calls
         rid2, cached2 = eng.enqueue_research("albert heijn")
         check(cached2 and rid2 == rid and llm.PROVIDERS["gemini"].calls == before, "riset ulang dalam 24 jam memakai cache")
+        old_runs = len(store.list_runs(50))
         info = eng.simulate(rid, 1)
         check(store.get_alert(info["alert_id"])["type"] == "data_gap", "simulasi membuat anomali baru beranotasi kasus")
+        cat = scenarios.current_catalog(config.BUSINESS_DB_PATH)
+        check(info["catalog_switched"] and cat["key"].startswith("ahold-delhaize") and cat["products"][0][1] == "AH Produk 1",
+              "toko demo diganti ke katalog simulasi perusahaan")
+        check([a["id"] for a in store.list_alerts()] == [info["alert_id"]], "anomali katalog lama diarsipkan, tidak tampil lagi")
+        check(len(store.list_runs(50)) >= old_runs, "riwayat investigasi lama tetap tersimpan")
         wait_idle(eng)
         check(store.get_run_row(info["run_id"])["status"] == "done", "anomali simulasi diinvestigasi agent")
         try:

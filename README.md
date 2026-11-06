@@ -59,6 +59,8 @@ flowchart LR
 3. **Analisis:** dampak operasional, tingkat risiko, mitigasi sesuai SOP (RAG), dan jenis skenario yang paling mirip.
 4. **Simulasi:** pola masalahnya diterapkan ke data toko demo. Injeksi dicoba dulu di salinan database dan baru diterapkan bila detektor benar-benar menghasilkan anomali baru. Anomali diberi label "simulasi kasus <perusahaan>" dan langsung diinvestigasi.
 
+**Katalog simulasi per perusahaan:** saat analisis riset, AI sekalian menyusun katalog simulasi (4 gerai dan 8 produk khas perusahaan, harga perkiraan dalam rupiah). Saat temuan disimulasikan, toko demo diganti ke katalog itu (anomali katalog lama diarsipkan, riwayat tetap ada), sehingga simulasi Hermès memakai produk seperti tas dan syal, bukan sembako. Bila katalog tidak tersedia, toko sembako default dipakai.
+
 **Cadangan Google News:** bila Google Search di Gemini kena batas kuota, OpsPilot mengambil artikel terbaru dari Google News RSS (gratis, tanpa API key), memberi setiap artikel ID (A1, A2, ...), lalu AI (Gemini atau Groq) mengelompokkan masalah yang wajib merujuk ID artikel. Kode membuang temuan yang merujuk artikel yang tidak ada. Mode sumber selalu ditampilkan di hasil riset.
 
 Temuan selalu berasal dari sumber publik, bukan data internal perusahaan. Nama perusahaan dari pengguna dibersihkan dan dibatasi 80 karakter sebelum dipakai di prompt.
@@ -74,6 +76,7 @@ Temuan selalu berasal dari sumber publik, bukan data internal perusahaan. Nama p
 | `supplier_gula_multi_toko` | Satu supplier terlambat ke dua toko | Tiket ke Procurement |
 | `lonjakan_medan_mie` | Permintaan melonjak, stok menipis | Transfer stok atau tiket |
 | `data_pos_jakarta` | Data hilang karena sinkronisasi POS gagal | Tiket IT, tanpa aksi stok/harga |
+| `permintaan_turun_jakarta_sabun` | Permintaan turun, stok menumpuk | Tunda pesanan, transfer ke toko yang masih laku |
 | `toko_tutup_surabaya` | Pendapatan turun karena renovasi terjadwal | Tidak perlu tindakan korektif |
 
 Data toko demo dimulai **bersih tanpa anomali**. Alur demo: riset perusahaan nyata, simulasikan temuannya, lalu agent menyelesaikannya. Skenario di tabel ini dipakai evaluasi (dijalankan satu per satu) dan tes offline.

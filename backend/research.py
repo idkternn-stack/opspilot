@@ -12,19 +12,20 @@ import datetime as dt
 import json
 import re
 
-from . import llm, news, tools
+from . import llm, news, scenarios, tools
 from .agent import MemorySink
 
 CATEGORIES = {
     "stok_pasokan": "Stok & pasokan", "distribusi": "Distribusi & pengiriman", "harga_promo": "Harga & promo",
-    "sistem_data": "Sistem, data & siber", "permintaan": "Lonjakan permintaan", "penutupan_toko": "Penutupan toko",
+    "sistem_data": "Sistem, data & siber", "permintaan": "Perubahan permintaan", "penutupan_toko": "Penutupan toko",
     "keuangan": "Keuangan", "regulasi": "Regulasi & hukum", "recall": "Penarikan produk", "lainnya": "Lainnya",
 }
 SCENARIO_LABELS = {
     "stockout_delay": "Stok habis karena pengiriman terlambat",
     "supplier_delay": "Pemasok terlambat ke beberapa toko",
     "wrong_discount": "Kesalahan harga atau diskon",
-    "demand_spike": "Lonjakan permintaan",
+    "demand_spike": "Lonjakan permintaan, stok menipis",
+    "demand_drop": "Permintaan turun, stok menumpuk",
     "data_gap": "Gangguan sistem POS, data penjualan hilang",
     "store_closure": "Toko tutup sementara",
     "none": "Tidak bisa disimulasikan di data toko",
@@ -77,13 +78,21 @@ Untuk setiap temuan, nilai:
 - sop: daftar nama file SOP yang dirujuk (boleh kosong)
 - skenario: jenis skenario data toko yang paling mirip untuk disimulasikan, salah satu dari:
   {scenarios}
+  Perhatikan arah: permintaan/penjualan TURUN -> demand_drop, permintaan NAIK -> demand_spike.
   Pilih "none" bila masalahnya tidak tampak di data penjualan/stok toko (misalnya murni hukum atau keuangan).
 - alasan_skenario: satu kalimat alasan pemilihan skenario
+
+Susun juga katalog SIMULASI untuk toko demo yang mencerminkan bisnis {company}: tepat 4 toko/gerai (nama dan kota yang
+masuk akal untuk perusahaan itu, boleh campuran Indonesia dan luar negeri) dan tepat 8 produk khas perusahaan itu.
+Harga dalam rupiah, perkiraan wajar (bukan data resmi); harga_pokok lebih kecil dari harga; qty_harian = rata-rata unit
+terjual per gerai per hari (3 sampai 120, kecil untuk barang mewah, besar untuk barang harian).
 
 Balas HANYA JSON dengan bentuk:
 {{"ringkasan": "<2-3 kalimat gambaran risiko keseluruhan>",
   "temuan": [{{"nomor": 1, "dampak": "...", "risiko": "tinggi", "mitigasi": ["..."], "sop": ["sop_x.md"],
-              "skenario": "stockout_delay", "alasan_skenario": "..."}}]}}"""
+              "skenario": "stockout_delay", "alasan_skenario": "..."}}],
+  "katalog": {{"toko": [{{"nama": "...", "kota": "..."}}],
+              "produk": [{{"nama": "...", "kategori": "...", "harga": 0, "harga_pokok": 0, "qty_harian": 0}}]}}}}"""
 
 _LABEL = r"^[\s*_#>-]*{name}[\s*_]*:[\s*_]*(.*?)\s*$"
 
@@ -192,6 +201,7 @@ def verify(issues, today=None):
 
 CATEGORY_SCENARIO = {"stok_pasokan": "stockout_delay", "distribusi": "supplier_delay", "harga_promo": "wrong_discount",
                      "sistem_data": "data_gap", "permintaan": "demand_spike", "penutupan_toko": "store_closure"}
+DROP_WORDS = ("turun", "menurun", "anjlok", "lesu", "melemah", "decline", "drop", "falling", "losing", "plummet", "slump", "weak")
 
 
 def _sops_for(issues):
@@ -207,6 +217,9 @@ def _fallback_analysis(issues, docs):
     """Dipakai bila semua model AI tidak bisa dipakai: skenario dipilih dari kategori temuan."""
     for issue in issues:
         sc = CATEGORY_SCENARIO.get(issue["category"], "none")
+        text = f"{issue['title']} {issue['summary']}".lower()
+        if sc == "demand_spike" and any(w in text for w in DROP_WORDS):
+            sc = "demand_drop"
         issue.update(scenario=sc, scenario_label=SCENARIO_LABELS[sc],
                      scenario_reason="Dipilih dari kategori temuan (analisis AI tidak tersedia).",
                      sop=sorted(docs)[:1] if sc != "none" else [])
@@ -224,7 +237,7 @@ def analyze(company, issues, sink):
     except llm.LLMUnavailable as e:
         sink.event("retry", {"text": f"{e} Temuan tetap ditampilkan; skenario dipilih dari kategori."})
         _fallback_analysis(issues, docs)
-        return "Analisis dampak AI tidak tersedia saat ini. Temuan dan sumber tetap valid.", sorted(docs), None
+        return "Analisis dampak AI tidak tersedia saat ini. Temuan dan sumber tetap valid.", sorted(docs), None, None
     by_no = {int(t.get("nomor", 0)): t for t in data.get("temuan", []) if str(t.get("nomor", "")).isdigit()}
     for issue in issues:
         a = by_no.get(issue["id"], {})
@@ -237,7 +250,13 @@ def analyze(company, issues, sink):
             scenario=scenario, scenario_label=SCENARIO_LABELS[scenario],
             scenario_reason=str(a.get("alasan_skenario", "")).strip(),
         )
-    return str(data.get("ringkasan", "")).strip(), sorted(docs), model
+    catalog = None
+    try:
+        catalog = scenarios.normalize_catalog(data.get("katalog") or {}, company)
+        sink.event("status", {"text": f"Katalog simulasi {company}: " + ", ".join(p[1] for p in catalog["products"]) + "."})
+    except scenarios.CatalogError as e:
+        sink.event("status", {"text": f"Katalog simulasi tidak valid ({e}); simulasi memakai toko sembako default."})
+    return str(data.get("ringkasan", "")).strip(), sorted(docs), model, catalog
 
 
 NEWS_SYSTEM = """Kamu adalah analis riset operasional. Kamu hanya boleh memakai informasi yang tertulis di judul artikel
@@ -317,11 +336,11 @@ def research_company(company, sink=None, today=None):
     sink.event("sourcecheck", {"text": f"Verifikasi sumber: {len(raw)} temuan dari pencarian, {len(issues)} lolos verifikasi sumber"
                                   + (f", {len(dropped)} dibuang karena tidak punya sumber." if dropped else ".")})
 
-    overall, sop_used, analysis_model = "", [], None
+    overall, sop_used, analysis_model, catalog = "", [], None, None
     if issues:
         sink.event("status", {"text": "Menganalisis dampak operasional dan mencocokkan dengan SOP."})
         try:
-            overall, sop_used, analysis_model = analyze(profile["name"] or company, issues, sink)
+            overall, sop_used, analysis_model, catalog = analyze(profile["name"] or company, issues, sink)
         except Exception as e:
             sink.event("error", {"text": f"Analisis dampak gagal: {e}. Temuan tetap ditampilkan."})
     elif found:
@@ -333,5 +352,5 @@ def research_company(company, sink=None, today=None):
     model = search_model + (f" + {analysis_model}" if analysis_model and analysis_model != search_model else "")
     return {"company_input": company, "company": profile, "found": found or bool(issues), "issues": issues,
             "dropped": dropped, "search_queries": queries, "overall": overall, "sop_used": sop_used,
-            "source_mode": source_mode,
+            "source_mode": source_mode, "catalog": catalog,
             "model": model, "searched_at": dt.datetime.now().isoformat(timespec="seconds")}

@@ -28,6 +28,8 @@ Aturan:
 - Jangan mengusulkan tindakan yang tidak perlu: tidak ada aksi korektif untuk kegiatan terjadwal yang disetujui,
   dan tidak ada aksi stok/harga bila data penjualan belum lengkap.
 - Transfer stok: toko asal tidak boleh turun di bawah reorder point.
+- Penjualan turun tanpa keterlambatan pengiriman dan stok masih menumpuk berarti permintaan turun: usulkan
+  menunda/mengurangi pesanan ke Procurement dan/atau transfer stok ke toko yang penjualannya masih normal.
 - Bila anomali punya detail.simulation, itu simulasi di data demo yang meniru pola kasus publik suatu
   perusahaan. Sebut konteksnya satu kalimat di akar_masalah; bukti tetap dari data.
 - Tulis dalam Bahasa Indonesia. Balas HANYA JSON valid."""

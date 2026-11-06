@@ -8,8 +8,11 @@ Jendela waktu: data 30 hari terakhir. "Periode terkini" = 3 hari terakhir,
 "baseline" = hari ke-8 sampai ke-30 ke belakang.
 """
 import datetime as dt
+import json
 import os
 import random
+import re
+import unicodedata
 import sqlite3
 
 STORES = [(1, "Jakarta Pusat", "Jakarta"), (2, "Bandung Dago", "Bandung"),
@@ -73,6 +76,13 @@ SCENARIOS = {
         "expect": {"keywords": [["lonjakan", "melonjak", "naik", "meningkat", "kenaikan", "spike"], ["stok", "persediaan"]],
                    "actions_any": ["transfer_stock", "create_ticket"], "forbidden": ["pause_promo"]},
     },
+    "permintaan_turun_jakarta_sabun": {
+        "kind": "demand_drop", "store": 1, "product": 7,
+        "title": "Permintaan Sabun Mandi di Jakarta turun tajam, stok menumpuk",
+        "expected_alert": "sales_drop",
+        "expect": {"keywords": [["permintaan", "turun", "menurun", "lesu", "melemah"], ["stok", "menumpuk", "berlebih", "overstock", "persediaan"]],
+                   "actions_any": ["create_ticket", "transfer_stock"], "forbidden": ["pause_promo"]},
+    },
     "data_pos_jakarta": {
         "kind": "data_gap", "store": 1, "days": [2, 3],
         "title": "Data penjualan Jakarta hilang 2 hari karena sinkronisasi POS gagal",
@@ -96,6 +106,56 @@ DEMO = []
 EXAMPLE_SET = ["stockout_bandung_minyak", "discount_surabaya_beras", "supplier_gula_multi_toko",
         "lonjakan_medan_mie", "data_pos_jakarta"]
 
+MAX_NAME = 40
+
+
+class CatalogError(ValueError):
+    pass
+
+
+def normalize_catalog(raw, company=""):
+    """Memvalidasi katalog dari AI: tepat 4 toko dan 8 produk dengan harga masuk akal."""
+    if not isinstance(raw, dict):
+        raise CatalogError("Katalog bukan objek.")
+    clean = lambda v: re.sub(r"\s+", " ", re.sub(r"[<>{}`\"]", "", str(v or ""))).strip()[:MAX_NAME]
+    stores, products = [], []
+    for i, t in enumerate((raw.get("toko") or [])[:4], 1):
+        name = clean(t.get("nama") if isinstance(t, dict) else t)
+        city = clean(t.get("kota") if isinstance(t, dict) else "") or name
+        if name:
+            stores.append((i, name, city))
+    for i, p in enumerate((raw.get("produk") or [])[:8], 1):
+        if not isinstance(p, dict):
+            continue
+        name, cat = clean(p.get("nama")), clean(p.get("kategori")) or "Umum"
+        try:
+            price, cost, qty = float(p.get("harga")), float(p.get("harga_pokok")), float(p.get("qty_harian"))
+        except (TypeError, ValueError):
+            continue
+        if not name or not (0 < cost < price <= 5e9):
+            continue
+        products.append((i, name, cat, round(price), round(cost), int(min(max(qty, 3), 120))))
+    if len(stores) < 4 or len(products) < 8:
+        raise CatalogError("Katalog butuh tepat 4 toko dan 8 produk yang valid.")
+    company = clean(company or raw.get("perusahaan")) or "Perusahaan"
+    ascii_name = unicodedata.normalize("NFKD", company).encode("ascii", "ignore").decode()
+    key = re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")[:30] or "perusahaan"
+    return {"company": company, "key": key, "stores": stores, "products": products}
+
+
+def load_catalog(obj, company=""):
+    """Menerima katalog yang sudah dinormalisasi (dari hasil riset) atau mentah (dari AI)."""
+    if isinstance(obj, dict) and "stores" in obj and "products" in obj:
+        stores, products = [tuple(s) for s in obj["stores"]], [tuple(p) for p in obj["products"]]
+        if len(stores) != 4 or len(products) != 8:
+            raise CatalogError("Katalog butuh tepat 4 toko dan 8 produk.")
+        return {"company": obj.get("company") or company, "key": obj.get("key") or "perusahaan",
+                "stores": stores, "products": products}
+    return normalize_catalog(obj, company)
+
+
+DEFAULT_CATALOG = {"company": "Toko sembako (default)", "key": "default", "stores": STORES, "products": PRODUCTS}
+
 BUSINESS_SCHEMA = """
 CREATE TABLE stores(id INTEGER PRIMARY KEY, name TEXT, city TEXT);
 CREATE TABLE products(id INTEGER PRIMARY KEY, name TEXT, category TEXT, price REAL, cost REAL, base_qty INTEGER);
@@ -106,14 +166,22 @@ CREATE TABLE promotions(store_id INT, product_id INT, discount REAL, active INT,
 CREATE TABLE pos_sync_log(store_id INT, date TEXT, status TEXT, note TEXT);
 CREATE TABLE store_events(store_id INT, start_date TEXT, end_date TEXT, event TEXT);
 CREATE TABLE stock_transfers(id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INT, from_store_id INT, to_store_id INT, qty INT, reason TEXT, created_at TEXT);
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE tickets(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, priority TEXT, description TEXT, created_at TEXT);
 CREATE TABLE notifications(id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT, message TEXT, created_at TEXT);
 """
 
 
-def build(path, scenario_ids=None, rnd_seed=7, today=None):
-    """Membuat database bisnis baru di `path` dengan skenario yang dipilih."""
+def build(path, scenario_ids=None, rnd_seed=7, today=None, catalog=None):
+    """Membuat database bisnis baru di `path` dengan skenario yang dipilih.
+
+    `catalog` (hasil normalize_catalog) mengganti toko dan produk default dengan katalog simulasi perusahaan.
+    """
     scenario_ids = DEMO if scenario_ids is None else scenario_ids
+    cat = catalog or DEFAULT_CATALOG
+    STORES, PRODUCTS = cat["stores"], cat["products"]
+    generic = catalog is not None
+    reorder = {p[0]: (max(2, round(p[5] * 1.25)) if generic else REORDER_POINT) for p in PRODUCTS}
     today = today or dt.date.today()
     rnd = random.Random(rnd_seed)
     day = lambda days_ago: (today - dt.timedelta(days=days_ago)).isoformat()
@@ -124,8 +192,11 @@ def build(path, scenario_ids=None, rnd_seed=7, today=None):
             for p, *_rest in PRODUCTS:
                 base = _rest[-1]
                 sales[(d, s, p)] = [round(base * rnd.uniform(0.8, 1.2)), 0.0]
-    inventory = {(s, p): rnd.randint(80, 300) for s, *_ in STORES for p, *_ in PRODUCTS}
-    deliveries = {(s, p): [DEFAULT_SUPPLIER, day(10), day(10), "DELIVERED"] for s, *_ in STORES for p, *_ in PRODUCTS}
+    base_of = {p[0]: p[5] for p in PRODUCTS}
+    inventory = {(s, p): (rnd.randint(base_of[p] * 2, round(base_of[p] * 7.5)) if generic else rnd.randint(80, 300))
+                 for s, *_ in STORES for p, *_ in PRODUCTS}
+    supplier = "Pemasok utama (simulasi)" if generic else DEFAULT_SUPPLIER
+    deliveries = {(s, p): [supplier, day(10), day(10), "DELIVERED"] for s, *_ in STORES for p, *_ in PRODUCTS}
     promotions, events = [], []
     missing, pos_failed = set(), {}
 
@@ -138,7 +209,7 @@ def build(path, scenario_ids=None, rnd_seed=7, today=None):
                 sales[(d, s, p)][0] = 0
             inventory[(s, p)] = 0
             inventory[(sc["donor"], p)] = 300
-            deliveries[(s, p)] = [DEFAULT_SUPPLIER, day(6), None, "DELAYED"]
+            deliveries[(s, p)] = [supplier, day(6), None, "DELAYED"]
         elif kind == "wrong_discount":
             s, p = sc["store"], sc["product"]
             for d in range(1, 4):
@@ -162,6 +233,11 @@ def build(path, scenario_ids=None, rnd_seed=7, today=None):
                 sales[(d, s, p)][0] *= sc["factor"]
             inventory[(s, p)] = 60
             inventory[(sc["donor"], p)] = 300
+        elif kind == "demand_drop":
+            s, p = sc["store"], sc["product"]
+            for d in range(1, 5):
+                sales[(d, s, p)][0] = round(sales[(d, s, p)][0] * 0.25)
+            inventory[(s, p)] = max(inventory[(s, p)], base_of[p] * 15)
         elif kind == "data_gap":
             for d in sc["days"]:
                 missing.add((sc["store"], d))
@@ -187,14 +263,28 @@ def build(path, scenario_ids=None, rnd_seed=7, today=None):
         con.executemany("INSERT INTO sales VALUES (?,?,?,?,?)",
                         [(day(d), s, p, q, disc) for (d, s, p), (q, disc) in sales.items() if (s, d) not in missing])
         con.executemany("INSERT INTO inventory VALUES (?,?,?,?)",
-                        [(s, p, stock, REORDER_POINT) for (s, p), stock in inventory.items()])
+                        [(s, p, stock, reorder[p]) for (s, p), stock in inventory.items()])
         con.executemany("INSERT INTO deliveries VALUES (?,?,?,?,?,?)", [(s, p, *v) for (s, p), v in deliveries.items()])
         con.executemany("INSERT INTO promotions VALUES (?,?,?,?,?)", promotions)
         con.executemany("INSERT INTO store_events VALUES (?,?,?,?)", events)
         con.executemany("INSERT INTO pos_sync_log VALUES (?,?,?,?)",
                         [(s, day(d), "FAILED" if (s, d) in pos_failed else "OK", pos_failed.get((s, d), ""))
                          for d in range(DAYS, 0, -1) for s, *_ in STORES])
+        con.execute("INSERT INTO meta VALUES ('catalog', ?)", (json.dumps(cat, ensure_ascii=False),))
         con.commit()
     finally:
         con.close()
     return path
+
+
+def current_catalog(path):
+    """Katalog yang sedang dipakai database bisnis (default bila belum ada meta)."""
+    try:
+        con = sqlite3.connect(path)
+        try:
+            row = con.execute("SELECT value FROM meta WHERE key = 'catalog'").fetchone()
+        finally:
+            con.close()
+        return json.loads(row[0]) if row else DEFAULT_CATALOG
+    except sqlite3.Error:
+        return DEFAULT_CATALOG

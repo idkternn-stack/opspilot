@@ -139,9 +139,25 @@ def gather(alert, sink, today=None):
         _context(ev, sids, week, recent10)
         ev.run("loss", f"Estimasi kerugian {d.get('product')} di toko terdampak pertama", "estimate_loss",
                {"store_id": sids[0], "product_id": pid})
+        stock = {r["store_id"]: r for r in ev.rows("stock_all")}
+        cover = []
+        for s in d.get("stores", []):
+            st = stock.get(int(s["store_id"]))
+            if st:
+                rq = s.get("recent_avg_qty") or 0
+                cover.append({"store": s["store"], "stok": st["stock"], "reorder_point": st["reorder_point"],
+                              "qty_terkini": rq, "qty_baseline": s.get("baseline_avg_qty"),
+                              "days_of_cover": round(st["stock"] / rq, 1) if rq else None})
+        if cover:
+            ev.add("cover", "Perhitungan stok vs penjualan terkini di toko terdampak", "hitung_days_of_cover", {}, cover)
         delayed = [r for r in ev.rows("deliveries_product") if r.get("status") == "DELAYED"]
-        sop_query = ("satu supplier terlambat beberapa toko supplier alternatif" if len(delayed) > 1
-                     else "stok habis pengiriman supplier terlambat transfer stok")
+        overstock = any(c["stok"] >= 3 * c["reorder_point"] for c in cover)
+        if len(delayed) > 1:
+            sop_query = "satu supplier terlambat beberapa toko supplier alternatif"
+        elif not delayed and overstock:
+            sop_query = "permintaan turun stok menumpuk eskalasi penurunan penjualan"
+        else:
+            sop_query = "stok habis pengiriman supplier terlambat transfer stok"
 
     elif t == "discount_anomaly":
         sid, pid = int(d["store_id"]), int(d["product_id"])

@@ -65,6 +65,7 @@ def list_alerts():
         SELECT a.*, r.id AS run_id, r.status AS run_status, r.mode AS run_mode
         FROM alerts a LEFT JOIN runs r ON r.id = (
             SELECT id FROM runs WHERE alert_id = a.id ORDER BY created_at DESC, rowid DESC LIMIT 1)
+        WHERE a.status != 'archived'
         ORDER BY a.created_at, a.rowid""")
     out = []
     for r in rows:
@@ -202,9 +203,25 @@ def reset():
             con.close()
 
 
+def archive_alerts():
+    """Anomali katalog lama diarsipkan (ID diberi akhiran) supaya ID baru tidak bentrok; riwayat tetap ada."""
+    tag = "@" + dt.datetime.now().strftime("%Y%m%d%H%M%S")
+    with db.APP_WRITE_LOCK:
+        con = db.app()
+        try:
+            con.execute("UPDATE runs SET alert_id = alert_id || ? WHERE alert_id NOT LIKE '%@%'", (tag,))
+            con.execute("UPDATE proposals SET alert_id = alert_id || ? WHERE alert_id NOT LIKE '%@%'", (tag,))
+            con.execute("UPDATE alerts SET id = id || ?, status = 'archived' WHERE id NOT LIKE '%@%'", (tag,))
+            con.commit()
+        finally:
+            con.close()
+
+
 # -------------------------------------------------------------- recordings
 def _recording_path(alert_id):
-    safe = "".join(c if c.isalnum() else "_" for c in alert_id)
+    from . import scenarios  # hindari impor melingkar
+    catalog = scenarios.current_catalog(config.BUSINESS_DB_PATH).get("key", "default")
+    safe = "".join(c if c.isalnum() else "_" for c in f"{catalog}__{alert_id}")
     return os.path.join(config.RECORDINGS_DIR, f"{safe}.json")
 
 

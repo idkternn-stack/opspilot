@@ -91,7 +91,27 @@ def diagnose(alert, ev):
         for s in d.get("stores", []):
             out["bukti"].append({"klaim": f"Penjualan {d.get('product')} di {s['store']} turun dari {s['baseline_avg_qty']} "
                                           f"menjadi {s['recent_avg_qty']} unit per hari", "ref": eid("alert")})
-        if delayed:
+        cover = ev.by_key.get("cover", {}).get("result") if "cover" in ev.by_key else None
+        over = [c for c in (cover or []) if c["stok"] >= 3 * c["reorder_point"]]
+        if not delayed and over:
+            c = over[0]
+            out["akar_masalah"] = f"Permintaan {d.get('product')} di {c['store']} turun sehingga stok menumpuk."
+            out["bukti"].append({"klaim": f"Stok {d.get('product')} di {c['store']} {c['stok']} unit, reorder point {c['reorder_point']}",
+                                 "ref": eid("cover")})
+            out["bukti"].append({"klaim": "Tidak ada pengiriman berstatus DELAYED", "ref": eid("deliveries_product")})
+            out["dampak"] = "Modal tertahan di stok berlebih dan risiko barang tidak laku."
+            out["tindakan"].append({"tool": "create_ticket", "args": {"title": f"Tunda pesanan {d.get('product')}", "priority": "MEDIUM",
+                                    "description": f"Permintaan di {c['store']} turun, stok menumpuk."}, "alasan": "SOP eskalasi"})
+            first = int(d["stores"][0]["store_id"])
+            others = [r for r in ev.rows("sales_by_store") if r.get("store_id") != first and r.get("qty_terkini")]
+            if others:
+                best = max(others, key=lambda r: r["qty_terkini"])
+                qty = int(min(c["stok"] - c["reorder_point"], max(1, (best.get("qty_baseline") or 1) * 5)))
+                if qty > 0:
+                    out["tindakan"].append({"tool": "transfer_stock", "args": {"product_id": d["product_id"], "from_store_id": first,
+                                            "to_store_id": best["store_id"], "qty": qty, "reason": "Pindahkan stok berlebih"},
+                                            "alasan": f"{best['store']} penjualannya masih {best['qty_terkini']} unit/hari"})
+        elif delayed:
             sup = sorted(suppliers)[0]
             out["akar_masalah"] = (f"Supplier {sup} terlambat mengirim {d.get('product')} ke {len(delayed)} toko."
                                    if len(delayed) > 1 else f"Stok {d.get('product')} habis karena pengiriman {sup} terlambat.")
