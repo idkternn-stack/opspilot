@@ -77,6 +77,12 @@ class FakeAI:
         if self.fail:
             raise llm.Skip(self.fail)
         self.calls += 1
+        if "dari Google News tentang" in prompt:
+            return {"perusahaan": {"nama": "Shopee Indonesia", "negara": "Indonesia", "sektor": "E-commerce"}, "ditemukan": True,
+                    "masalah": [{"judul": "Gangguan aplikasi", "tanggal": "", "kategori": "sistem_data",
+                                 "ringkasan": "Pengguna melaporkan aplikasi tidak bisa dibuka.", "artikel": ["A1"]},
+                                {"judul": "Temuan karangan", "tanggal": "2026-11-01", "kategori": "harga_promo",
+                                 "ringkasan": "Tidak merujuk artikel nyata.", "artikel": ["A99"]}]}
         if "Berikut temuan terverifikasi" in prompt:
             return {"ringkasan": "Risiko gangguan sistem tinggi.", "temuan": [
                 {"nomor": 1, "dampak": "Distribusi berhenti", "risiko": "tinggi", "mitigasi": ["Prosedur manual"],
@@ -244,6 +250,41 @@ def main():
             check(False, "temuan tanpa skenario tidak bisa disimulasikan")
         except ValueError:
             check(True, "temuan tanpa skenario tidak bisa disimulasikan")
+        print("Riset cadangan Google News")
+        from backend import news, research
+        today = time.strftime("%a, %d %b %Y 03:00:00 GMT")
+        xml = f"""<rss><channel>
+          <item><title>Aplikasi Shopee down pagi ini - Kompas.com</title><link>https://news.google.com/rss/articles/abc</link>
+            <pubDate>{today}</pubDate><source url="https://www.kompas.com">Kompas.com</source></item>
+          <item><title>Promo 11.11 Shopee - Detik</title><link>https://news.google.com/rss/articles/def</link>
+            <pubDate>{today}</pubDate><source url="https://www.detik.com">Detik</source></item>
+          <item><title>Berita lama</title><link>https://news.google.com/rss/articles/old</link>
+            <pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate><source url="https://x.com">X</source></item>
+        </channel></rss>"""
+        class R:
+            text, status_code = xml, 200
+            def raise_for_status(self):
+                pass
+        arts = news.fetch("Shopee", client=type("C", (), {"get": staticmethod(lambda *a, **k: R())}))
+        check(len(arts) == 2 and arts[0]["title"] == "Aplikasi Shopee down pagi ini" and arts[0]["domain"] == "www.kompas.com",
+              "RSS diparse: judul dibersihkan, artikel lama dibuang, judul operasional diutamakan")
+        llm.reset_state()
+        g = FakeAI("gemini")
+        g.search = lambda *a: (_ for _ in ()).throw(llm.Skip("batas per menit tercapai (SearchGroundingRequestsPerMinute)", 30))
+        llm.PROVIDERS["gemini"] = g
+        real_fetch = news.fetch
+        news.fetch = lambda company, **k: arts
+        try:
+            out = research.research_company("Shopee", agent.MemorySink())
+        finally:
+            news.fetch = real_fetch
+        check(out["source_mode"] == "Google News (cadangan)" and len(out["issues"]) == 1,
+              "Google Search kena batas -> riset tetap jalan lewat Google News")
+        check(out["dropped"] == ["Temuan karangan"], "temuan yang merujuk artikel tidak ada dibuang")
+        check(out["issues"][0]["date"] and out["issues"][0]["sources"][0]["url"].startswith("https://news.google.com"),
+              "tanggal dan link diambil dari artikel asli")
+        data, _ = llm.complete_json("s", "ANOMALI:\n" + json.dumps({"id": "x", "title": "t", "type": "data_gap"}) + "\n\nBUKTI")
+        check(isinstance(data, dict), "batas Google Search tidak memblokir panggilan AI biasa")
         print("\nSemua tes lulus.")
     finally:
         for k, v in saved.items():

@@ -59,6 +59,8 @@ flowchart LR
 3. **Analisis:** dampak operasional, tingkat risiko, mitigasi sesuai SOP (RAG), dan jenis skenario yang paling mirip.
 4. **Simulasi:** pola masalahnya diterapkan ke data toko demo. Injeksi dicoba dulu di salinan database dan baru diterapkan bila detektor benar-benar menghasilkan anomali baru. Anomali diberi label "simulasi kasus <perusahaan>" dan langsung diinvestigasi.
 
+**Cadangan Google News:** bila Google Search di Gemini kena batas kuota, OpsPilot mengambil artikel terbaru dari Google News RSS (gratis, tanpa API key), memberi setiap artikel ID (A1, A2, ...), lalu AI (Gemini atau Groq) mengelompokkan masalah yang wajib merujuk ID artikel. Kode membuang temuan yang merujuk artikel yang tidak ada. Mode sumber selalu ditampilkan di hasil riset.
+
 Temuan selalu berasal dari sumber publik, bukan data internal perusahaan. Nama perusahaan dari pengguna dibersihkan dan dibatasi 80 karakter sebelum dipakai di prompt.
 
 ## Skenario anomali
@@ -143,6 +145,7 @@ backend/
   detect.py     detektor anomali
   scenarios.py  data sintetis dan skenario
   research.py   riset perusahaan lewat Google Search dan verifikasi sumber
+  news.py       cadangan Google News RSS untuk riset
   simulate.py   simulasi pola kasus nyata ke data demo
   engine.py     autopilot, antrean, riset, mode rekaman
   store.py      jejak audit dan rekaman

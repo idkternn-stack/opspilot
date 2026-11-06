@@ -120,7 +120,9 @@ class GeminiProvider:
             daily = "PerDay" in raw
             m = re.search(r'"retryDelay":\s*"(\d+(?:\.\d+)?)s"', raw)
             wait = None if daily else (float(m.group(1)) if m else 30.0)
-            raise Skip("kuota harian habis" if daily else "batas per menit tercapai", wait)
+            quota = ", ".join(sorted(set(re.findall(r'"quotaId":\s*"([^"]+)"', raw))))
+            base = "kuota harian habis" if daily else "batas per menit tercapai"
+            raise Skip(f"{base} ({quota})" if quota else base, wait)
         if e.code in (500, 503, 504):
             raise Skip(f"server sibuk ({e.code})", 20)
         raise LLMConfigError(f"Gemini API error {e.code}: {text}")
@@ -211,14 +213,14 @@ def status():
     return out
 
 
-def _run(candidates, call, sink, purpose):
+def _run(candidates, call, sink, purpose, kind="json", patient=True):
     """Mencoba (penyedia, model) berurutan. Mengembalikan (hasil, "penyedia/model")."""
     if not candidates:
         raise LLMUnavailable("Belum ada API key LLM. Isi GEMINI_API_KEY (dan opsional GROQ_API_KEY) di .env.")
     reasons, waits = [], []
     for attempt in range(2):  # putaran kedua hanya bila ada model yang cuma perlu menunggu sebentar
         for prov, model in candidates:
-            key = (prov.name, model)
+            key = (prov.name, model, kind)
             until = _cooldown.get(key, 0)
             if until > time.time():
                 if attempt == 0:
@@ -243,8 +245,9 @@ def _run(candidates, call, sink, purpose):
             except LLMConfigError as e:  # key ditolak: lewati penyedia ini, coba penyedia lain
                 reasons.append(f"{prov.name}: {e}")
                 for m in prov.models():
-                    _cooldown[(prov.name, m)] = time.time() + 300
-                    _last_reason[(prov.name, m)] = "API key ditolak"
+                    for k in ("json", "search"):
+                        _cooldown[(prov.name, m, k)] = time.time() + 300
+                        _last_reason[(prov.name, m, k)] = "API key ditolak"
                 if sink:
                     sink.event("retry", {"text": f"{e} Mencoba penyedia lain."})
             except ValueError as e:  # JSON rusak: anggap gagal sementara untuk model ini
@@ -252,7 +255,7 @@ def _run(candidates, call, sink, purpose):
                 if sink:
                     sink.event("retry", {"text": f"{prov.name}/{model}: {e} Mencoba berikutnya."})
         soon = [w for w in waits if w - time.time() <= 45]
-        if not soon:
+        if not soon or not patient:
             break
     raise LLMUnavailable("Semua model AI sedang tidak bisa dipakai untuk " + purpose + ": " + "; ".join(reasons[-4:]) + ".")
 
@@ -266,7 +269,8 @@ def search_grounded(system, prompt, sink=None):
     g = PROVIDERS["gemini"]
     if not g.configured():
         raise LLMUnavailable("Riset perusahaan butuh GEMINI_API_KEY (Google Search hanya tersedia di Gemini).")
-    return _run([(g, m) for m in g.models()], lambda p, m: p.search(m, system, prompt), sink, "riset Google Search")
+    return _run([(g, m) for m in g.models()], lambda p, m: p.search(m, system, prompt), sink, "riset Google Search",
+                kind="search", patient=False)
 
 
 def reset_state():

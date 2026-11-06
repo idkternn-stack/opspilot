@@ -330,7 +330,7 @@ function renderResearch() {
   const res = r.result;
   const active = r.status === 'queued' || r.status === 'running';
   const name = res && res.company.name ? res.company.name : r.company;
-  let h = `<div class="card"><div class="row"><b>Riset: ${esc(name)}</b><span>${pill(['Sumber publik',''])} ${pill(RUNSTATUS[r.status] || [r.status,''])}</span></div>
+  let h = `<div class="card"><div class="row"><b>Riset: ${esc(name)}</b><span>${pill([res && res.source_mode ? res.source_mode : 'Sumber publik',''])} ${pill(RUNSTATUS[r.status] || [r.status,''])}</span></div>
     <div class="small" style="margin-top:4px">${r.status === 'done' ? `<button class="ghost" style="float:right;margin-left:8px" onclick="refreshResearch('${esc(r.company)}')">Cari ulang</button>` : ''}Dicari "${esc(r.company)}" · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik` : ''}${res && (res.company.country || res.company.sector) ? ' · ' + esc([res.company.country, res.company.sector].filter(Boolean).join(', ')) : ''}</div></div>`;
   if (active) h += `<p class="small"><span class="spinner"></span>${r.status === 'queued' ? 'Menunggu giliran…' : 'Mencari berita, memverifikasi sumber, dan menganalisis dampak…'}</p>`;
   if (r.status === 'error') h += `<div class="banner err">${esc(r.error)}</div>`;
