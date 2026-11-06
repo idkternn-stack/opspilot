@@ -49,6 +49,7 @@ class Engine:
         threading.Thread(target=self._worker, name="opspilot-worker", daemon=True).start()
         threading.Thread(target=self._monitor, name="opspilot-monitor", daemon=True).start()
         threading.Thread(target=self._research_worker, name="opspilot-research", daemon=True).start()
+        threading.Thread(target=self._watcher, name="opspilot-watch", daemon=True).start()
 
     def set_autopilot(self, enabled):
         self.autopilot = bool(enabled)
@@ -96,6 +97,18 @@ class Engine:
         log(f"antre riset {rid} untuk {company}")
         return rid, False
 
+    def watch_now(self, company=None):
+        """Riset ulang perusahaan yang dipantau (satu atau semua) tanpa cache."""
+        targets = [store.get_watch(company)] if company else store.list_watch()
+        started = []
+        for w in targets:
+            if not w or w.get("pending_research_id"):
+                continue
+            rid, _ = self.enqueue_research(w["company"], refresh=True)
+            store.set_watch_pending(w["company"], rid)
+            started.append(rid)
+        return started
+
     def simulate(self, research_id, issue_id):
         return simulate.simulate_issue(research_id, issue_id, self)
 
@@ -107,6 +120,18 @@ class Engine:
                 break
 
     # ------------------------------------------------------------ thread
+    def _watcher(self):
+        """Pemantauan otomatis: perusahaan di daftar pantau diriset ulang sesuai jadwal."""
+        while True:
+            try:
+                for w in store.due_watch(config.WATCH_INTERVAL_HOURS):
+                    rid, _ = self.enqueue_research(w["company"], refresh=True)
+                    store.set_watch_pending(w["company"], rid)
+                    log(f"pemantauan: riset ulang {w['company']} ({rid})")
+            except Exception:
+                traceback.print_exc()
+            time.sleep(config.WATCH_CHECK_S)
+
     def _monitor(self):
         while True:
             try:
@@ -152,10 +177,14 @@ class Engine:
             store.add_event(rid, "error", {"text": message})
             store.update_research(rid, status="error", error=message, finished_at=store._now(),
                                   duration_s=round(time.time() - started, 1))
+            store.watch_after_research(rid)
             return
         store.update_research(rid, status="done", result=result, model=result["model"], finished_at=store._now(),
                               duration_s=round(time.time() - started, 1))
         log(f"riset {rid} selesai: {len(result['issues'])} masalah terverifikasi")
+        new = store.watch_after_research(rid)
+        if new:
+            log(f"pemantauan: {new} masalah baru untuk {rec['company']}")
 
     def _execute(self, run_id):
         run = store.get_run_row(run_id)

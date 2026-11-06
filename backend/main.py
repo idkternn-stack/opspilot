@@ -6,10 +6,11 @@ import webbrowser
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, llm, scenarios, simulate, store, tools
+from . import config, db, llm, report, research, scenarios, simulate, store, tools
 from .engine import Engine
 
 engine = Engine()
@@ -26,6 +27,7 @@ async def lifespan(app):
         scenarios.build(config.BUSINESS_DB_PATH, catalog=None if cat.get("key") == "default" else scenarios.load_catalog(cat))
     store.mark_stale_runs()
     store.mark_stale_research()
+    store.clear_stale_watch()
     engine.start()
     if os.environ.get("OPEN_BROWSER") == "1":  # diset oleh start.bat
         threading.Timer(1.0, webbrowser.open, ["http://127.0.0.1:7860"]).start()
@@ -61,7 +63,9 @@ class SimulateIn(BaseModel):
 def state():
     return {"model": config.MODEL, "fallback_model": config.FALLBACK_MODEL, "llm": llm.status(), "autopilot": engine.status(),
             "catalog": {k: v for k, v in scenarios.current_catalog(config.BUSINESS_DB_PATH).items() if k in ("company", "key")},
-            "alerts": store.list_alerts(), "runs": store.list_runs(15), "research": store.list_research(10)}
+            "alerts": store.list_alerts(), "runs": store.list_runs(15), "research": store.list_research(10),
+            "summary": store.summary(), "watchlist": store.list_watch(),
+            "watch_interval_hours": config.WATCH_INTERVAL_HOURS}
 
 
 @app.post("/api/autopilot")
@@ -102,6 +106,14 @@ def run_detail(run_id: str, after: int = 0):
     if not run:
         raise HTTPException(404, "Investigasi tidak ditemukan.")
     return run
+
+
+@app.get("/api/runs/{run_id}/report", response_class=HTMLResponse)
+def run_report(run_id: str):
+    run = store.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "Investigasi tidak ditemukan.")
+    return HTMLResponse(report.render(run))
 
 
 @app.post("/api/decide")
@@ -149,6 +161,40 @@ def reset():
     scenarios.build(config.BUSINESS_DB_PATH, catalog=None if cat.get("key") == "default" else cat)
     store.reset()
     return {"new_alerts": engine.check_now()}
+
+
+class WatchIn(BaseModel):
+    company: Optional[str] = None
+    research_id: Optional[str] = None
+
+
+@app.post("/api/watchlist")
+def watch_add(body: WatchIn):
+    try:
+        company = research.clean_company(body.company)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    w = store.add_watch(company, body.research_id)
+    if not w["last_research_id"]:  # belum ada riset pembanding: riset sekarang
+        engine.watch_now(company)
+    return store.get_watch(company)
+
+
+@app.post("/api/watchlist/remove")
+def watch_remove(body: WatchIn):
+    store.remove_watch(body.company)
+    return {"ok": True}
+
+
+@app.post("/api/watchlist/check")
+def watch_check(body: WatchIn):
+    return {"research_ids": engine.watch_now(body.company)}
+
+
+@app.post("/api/watchlist/seen")
+def watch_seen(body: WatchIn):
+    store.clear_watch_new(body.company)
+    return {"ok": True}
 
 
 class DeleteIn(BaseModel):

@@ -53,8 +53,15 @@ input[type=text]:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
 button.del{background:transparent;border:1px solid transparent;color:var(--mute);padding:0 6px;font-size:18px;line-height:1.2}
 button.del:hover,button.del:focus-visible{color:var(--warn);border-color:var(--line)}
 button.sm{font-size:13px;padding:3px 10px}
+a.btnlink{display:inline-block;font-size:14px;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 12px;text-decoration:none}
+a.btnlink:hover{border-color:var(--acc)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .hrow{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:24px 0 10px}.hrow h2{margin:0}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0 4px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.stat .lbl{font-size:13px;color:var(--mute)}.stat .num{font-size:26px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+.stat .note{font-size:12px;color:var(--mute)}
+@media (max-width:720px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .list-item{display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--line)}.list-item:last-child{border-bottom:0}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:min(560px,calc(100% - 32px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;z-index:9}
 @keyframes pulse{50%{opacity:.25}}
@@ -66,6 +73,7 @@ button.sm{font-size:13px;padding:3px 10px}
   <h1>OpsPilot</h1>
   <p class="sub">Agent yang mencari masalah operasional terbaru perusahaan nyata, menganalisis akar masalahnya, dan mengusulkan solusi. Setiap aksi menunggu persetujuanmu.</p>
   <p class="small" id="aiText">Memuat…</p>
+  <section class="stats" id="stats" aria-label="Ringkasan"></section>
 
   <form class="card" id="researchForm">
     <label for="company" class="tl-name">Riset perusahaan nyata</label>
@@ -80,6 +88,8 @@ button.sm{font-size:13px;padding:3px 10px}
     <section aria-labelledby="hAlerts">
       <h2 id="hAlerts">Anomali</h2>
       <div id="alerts"><p class="empty">Memuat…</p></div>
+      <div class="hrow"><h2>Perusahaan dipantau</h2><button class="ghost sm" id="watchCheck">Cek semua sekarang</button></div>
+      <div class="card" style="padding:4px 12px" id="watchList"></div>
       <div class="hrow"><h2>Riwayat riset</h2><button class="ghost sm" id="delAllResearch">Hapus semua</button></div>
       <div class="card" style="padding:4px 12px" id="researchList"></div>
       <div class="hrow"><h2>Riwayat investigasi</h2><button class="ghost sm" id="delAllRuns">Hapus semua</button></div>
@@ -105,7 +115,7 @@ const pill = ([t, c]) => `<span class="pill ${c}">${esc(t)}</span>`;
 
 const TRIGGER = {autopilot:'Autopilot', manual:'Manual', simulasi:'Kasus nyata'};
 const RISK = {tinggi:['Risiko tinggi','warn'], sedang:['Risiko sedang','busy'], rendah:['Risiko rendah','ok']};
-let S = {view: 'run', selected: null, userPicked: false, run: null, research: null, events: [], lastId: 0, alerts: []};
+let S = {watch: [], watchHours: 24, view: 'run', selected: null, userPicked: false, run: null, research: null, events: [], lastId: 0, alerts: []};
 
 async function api(url, body) {
   let r;
@@ -127,6 +137,9 @@ async function refreshState() {
   const ap = st.autopilot;
   $('#aiText').innerHTML = `AI: ${esc((st.llm || []).filter(p => p.configured).map(p => `${p.provider} (${p.models.join(', ')}; maks ${p.rpm}/menit)`).join(' → ') || 'belum ada API key')}.`
     + (ap.current_run ? ' <span class="spinner"></span>Agent sedang bekerja.' : '');
+  renderStats(st.summary || {});
+  S.watch = st.watchlist || []; S.watchHours = st.watch_interval_hours;
+  renderWatch(S.watch);
   renderAlerts(st.alerts);
   renderHistory(st.runs);
   renderResearchList(st.research || []);
@@ -134,6 +147,14 @@ async function refreshState() {
     const follow = ap.current_run || (st.runs[0] && st.runs[0].id);
     if (follow && follow !== S.selected) selectRun(follow, false);
   }
+}
+
+function renderStats(m) {
+  const tile = (lbl, num, note) => `<div class="stat"><div class="lbl">${esc(lbl)}</div><div class="num">${esc(num ?? 0)}</div><div class="note">${esc(note)}</div></div>`;
+  $('#stats').innerHTML = tile('Perusahaan diriset', m.companies, `${m.issues || 0} masalah terverifikasi`)
+    + tile('Kasus dianalisis agent', m.analyzed, 'dari temuan riset')
+    + tile('Kasus risiko tinggi', m.high_risk, 'perlu ditangani segera')
+    + tile('Tindakan disetujui', m.approved, `${m.pending || 0} menunggu · ${m.rejected || 0} ditolak`);
 }
 
 function renderAlerts(list) {
@@ -261,6 +282,7 @@ function renderRun() {
   if (r.status === 'error') {
     h += `<div class="banner err">${esc(r.error)}</div><div class="row left"><button onclick="start('/api/investigate','${esc(r.alert_id)}')">Coba lagi</button>${r.has_recording ? `<button class="ghost" onclick="start('/api/replay','${esc(r.alert_id)}')">Putar rekaman</button>` : ''}</div>`;
   }
+  if (r.status === 'done') h += `<div class="row left"><a class="btnlink" href="/api/runs/${encodeURIComponent(r.id)}/report" target="_blank" rel="noopener">Unduh laporan (PDF)</a><span class="small">Laporan terbuka di tab baru, lalu pilih Cetak / Simpan PDF.</span></div>`;
   if (r.summary) h += `<h3>Ringkasan</h3><div class="card summary">${md(r.summary)}</div>`;
   if (r.proposals.length || r.status === 'done') {
     h += '<h3>Usulan tindakan</h3>';
@@ -313,7 +335,7 @@ async function pollResearch() {
 const safeUrl = u => /^https:\/\//i.test(u || '') ? u : null;
 
 function issueHtml(rid, i) {
-  let h = `<div class="card issue"><div class="row"><b>${esc(i.title)}</b><span>${pill([i.category_label,''])} ${i.confidence === 'terkonfirmasi' ? pill(['Terkonfirmasi','ok']) : pill(['Belum terkonfirmasi','warn'])} ${i.risk ? pill(RISK[i.risk]) : ''}</span></div>`;
+  let h = `<div class="card issue"><div class="row"><b>${i.new ? pill(['Baru','warn']) + ' ' : ''}${esc(i.title)}</b><span>${pill([i.category_label,''])} ${i.confidence === 'terkonfirmasi' ? pill(['Terkonfirmasi','ok']) : pill(['Belum terkonfirmasi','warn'])} ${i.risk ? pill(RISK[i.risk]) : ''}</span></div>`;
   h += `<div class="small">${esc(i.date || 'tanggal tidak jelas')}${i.flags.length ? ' · ' + esc(i.flags.join(', ')) : ''}</div>`;
   h += `<p>${esc(i.summary)}</p>`;
   if (i.relevant === false) h += `<div class="banner err" style="font-weight:400">Bukan masalah operasional perusahaan${i.relevance_reason ? ': ' + esc(i.relevance_reason) : '.'}</div>`;
@@ -337,7 +359,7 @@ function renderResearch() {
   const active = r.status === 'queued' || r.status === 'running';
   const name = res && res.company.name ? res.company.name : r.company;
   let h = `<div class="card"><div class="row"><b>Riset: ${esc(name)}</b><span>${pill([res && res.source_mode ? res.source_mode : 'Sumber publik',''])} ${pill(RUNSTATUS[r.status] || [r.status,''])}</span></div>
-    <div class="small" style="margin-top:4px">${r.status === 'done' ? `<button class="ghost" style="float:right;margin-left:8px" onclick="refreshResearch('${esc(r.company)}')">Cari ulang</button>` : ''}Dicari "${esc(r.company)}" · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik` : ''}${res && (res.company.country || res.company.sector) ? ' · ' + esc([res.company.country, res.company.sector].filter(Boolean).join(', ')) : ''}</div></div>`;
+    <div class="small" style="margin-top:4px">${r.status === 'done' ? `<button class="ghost" style="float:right;margin-left:8px" data-company="${esc(r.company)}" onclick="refreshResearch(this.dataset.company)">Cari ulang</button><button class="ghost" style="float:right;margin-left:8px" data-company="${esc(r.company)}" data-rid="${esc(r.id)}" onclick="toggleWatch(this)">${watchOf(r.company) ? 'Berhenti memantau' : 'Pantau perusahaan ini'}</button>` : ''}Dicari "${esc(r.company)}" · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik` : ''}${res && (res.company.country || res.company.sector) ? ' · ' + esc([res.company.country, res.company.sector].filter(Boolean).join(', ')) : ''}</div></div>`;
   if (active) h += `<p class="small"><span class="spinner"></span>${r.status === 'queued' ? 'Menunggu giliran…' : 'Mencari berita, memverifikasi sumber, dan menganalisis dampak…'}</p>`;
   if (r.status === 'error') h += `<div class="banner err">${esc(r.error)}</div>`;
   if (res) {
@@ -376,6 +398,41 @@ $('#researchForm').onsubmit = async e => {
   }
   catch (err) { toast(err.message); }
   btn.disabled = false;
+};
+
+// ---------------------------------------------------------------- pantau perusahaan
+const watchOf = company => (S.watch || []).find(w => w.key === String(company || '').trim().replace(/\s+/g, ' ').toLowerCase());
+function renderWatch(list) {
+  $('#watchCheck').hidden = !list.length;
+  $('#watchList').innerHTML = list.length ? list.map(w => {
+    const st = w.checking ? '<span class="spinner"></span>sedang dicek' : (w.last_checked ? `dicek ${esc(new Date(w.last_checked).toLocaleString('id-ID', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}))}` : 'menunggu pengecekan pertama');
+    return `<div class="list-item" data-rid="${esc(w.last_research_id || '')}" data-company="${esc(w.company)}" tabindex="0"><div><b>${esc(w.company)}</b> ${w.new_issues ? pill([`${w.new_issues} masalah baru`, 'warn']) : ''}<div class="small">${st} · riset ulang otomatis tiap ${esc(S.watchHours)} jam</div></div><button class="del" data-unwatch="${esc(w.company)}" title="Berhenti memantau" aria-label="Berhenti memantau ${esc(w.company)}">×</button></div>`;
+  }).join('') : '<p class="small">Belum ada. Buka hasil riset lalu klik <b>Pantau perusahaan ini</b>; OpsPilot akan riset ulang otomatis dan menandai masalah baru.</p>';
+  document.querySelectorAll('#watchList button.del').forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try { await api('/api/watchlist/remove', {company: b.dataset.unwatch}); refreshState(); } catch (err) { toast(err.message); }
+  });
+  document.querySelectorAll('#watchList .list-item').forEach(el => {
+    const open = async () => {
+      if (!el.dataset.rid) return toast('Riset pertama belum selesai.');
+      try { await api('/api/watchlist/seen', {company: el.dataset.company}); } catch {}
+      selectResearch(el.dataset.rid);
+    };
+    el.onclick = open; el.onkeydown = e => { if (e.key === 'Enter') open(); };
+  });
+}
+async function toggleWatch(btn) {
+  const company = btn.dataset.company, rid = btn.dataset.rid;
+  btn.disabled = true;
+  try {
+    if (watchOf(company)) { await api('/api/watchlist/remove', {company}); toast(`Berhenti memantau ${company}.`); }
+    else { await api('/api/watchlist', {company, research_id: rid}); toast(`${company} dipantau. OpsPilot akan riset ulang tiap ${S.watchHours} jam dan menandai masalah baru.`); }
+    await refreshState(); renderResearch();
+  } catch (e) { toast(e.message); btn.disabled = false; }
+}
+$('#watchCheck').onclick = async () => {
+  try { const r = await api('/api/watchlist/check', {}); toast(r.research_ids.length ? `Mengecek ulang ${r.research_ids.length} perusahaan.` : 'Semua perusahaan sedang dicek.'); refreshState(); }
+  catch (e) { toast(e.message); }
 };
 
 // ---------------------------------------------------------------- hapus riwayat

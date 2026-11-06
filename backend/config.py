@@ -52,6 +52,8 @@ MAX_EXTRA_ROUNDS = _int("OPSPILOT_MAX_EXTRA_ROUNDS", "1")             # putaran 
 VERIFY_REPAIR = os.environ.get("OPSPILOT_VERIFY_REPAIR", "1") != "0"   # 1 panggilan perbaikan bila bukti tidak cocok
 RULES_FALLBACK = os.environ.get("OPSPILOT_RULES_FALLBACK", "1") != "0" # mode tanpa AI bila semua penyedia habis
 RESEARCH_CACHE_HOURS = _int("OPSPILOT_RESEARCH_CACHE_HOURS", "24")
+WATCH_INTERVAL_HOURS = _int("OPSPILOT_WATCH_INTERVAL_HOURS", "24")  # riset ulang perusahaan yang dipantau
+WATCH_CHECK_S = _int("OPSPILOT_WATCH_CHECK_S", "600")  # seberapa sering jadwal pemantauan dicek
 
 # ---------------------------------------------------------------- Autopilot
 AUTOPILOT = os.environ.get("OPSPILOT_AUTOPILOT", "0") == "1"  # monitor data toko sintetis (nonaktif di alur utama)

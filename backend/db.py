@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS proposals(
 CREATE TABLE IF NOT EXISTS research(
   id TEXT PRIMARY KEY, company TEXT, status TEXT, model TEXT, result TEXT, error TEXT,
   created_at TEXT, started_at TEXT, finished_at TEXT, duration_s REAL);
+CREATE TABLE IF NOT EXISTS watchlist(
+  key TEXT PRIMARY KEY, company TEXT, added_at TEXT, last_checked TEXT, last_research_id TEXT,
+  pending_research_id TEXT, new_issues INTEGER DEFAULT 0, seen TEXT);
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_runs_alert ON runs(alert_id, created_at);
 """

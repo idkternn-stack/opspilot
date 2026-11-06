@@ -1,0 +1,17 @@
+# Blueprint Render: Dashboard -> New -> Blueprint -> pilih repo ini.
+# API key diisi di dashboard (tidak disimpan di repo).
+services:
+  - type: web
+    name: opspilot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/state
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false

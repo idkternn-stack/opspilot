@@ -2,6 +2,7 @@
 import datetime as dt
 import json
 import os
+import re
 import uuid
 
 from . import config, db, tools
@@ -391,3 +392,108 @@ def delete_research(research_ids=None):
         finally:
             con.close()
     return {"deleted": len(done), "skipped_running": len(busy)}
+
+
+# -------------------------------------------------------------------- ringkasan
+def summary():
+    """Angka ringkas untuk halaman utama."""
+    research = _read("SELECT company, result FROM research WHERE status = 'done'")
+    companies, issues = set(), 0
+    for r in research:
+        res = json.loads(r["result"]) if r["result"] else {}
+        companies.add(((res.get("company") or {}).get("name") or r["company"]).lower())
+        issues += len(res.get("issues", []))
+    alerts = [_alert(a) for a in _read("""SELECT a.* FROM alerts a WHERE a.status != 'archived'
+                                         AND EXISTS (SELECT 1 FROM runs r WHERE r.alert_id = a.id AND r.status = 'done')""")]
+    high = sum(1 for a in alerts if ((a["detail"].get("case") or {}).get("risk")) == "tinggi")
+    counts = {r["status"]: r["n"] for r in _read("SELECT status, COUNT(*) AS n FROM proposals GROUP BY status")}
+    return {"companies": len(companies), "issues": issues, "analyzed": len(alerts), "high_risk": high,
+            "approved": counts.get("approved", 0), "pending": counts.get("pending", 0),
+            "rejected": counts.get("rejected", 0)}
+
+
+# -------------------------------------------------------------------- pantau perusahaan
+def _issue_key(issue):
+    return re.sub(r"\W+", " ", str(issue.get("title", "")).lower()).strip()[:120]
+
+
+def watch_key(company):
+    return re.sub(r"\s+", " ", str(company or "")).strip().lower()
+
+
+def list_watch():
+    rows = _read("SELECT key, company, added_at, last_checked, last_research_id, pending_research_id, new_issues "
+                 "FROM watchlist ORDER BY added_at")
+    for r in rows:
+        r["checking"] = bool(r["pending_research_id"])
+    return rows
+
+
+def get_watch(company):
+    rows = _read("SELECT * FROM watchlist WHERE key = ?", (watch_key(company),))
+    return rows[0] if rows else None
+
+
+def add_watch(company, baseline_research_id=None):
+    """Menambah perusahaan ke daftar pantau. Riset terakhir (bila ada) jadi pembanding untuk masalah baru."""
+    key = watch_key(company)
+    if get_watch(company):
+        return get_watch(company)
+    seen, checked = [], None
+    rec = get_research(baseline_research_id) if baseline_research_id else None
+    if rec and rec["status"] == "done" and rec["result"]:
+        seen = [_issue_key(i) for i in rec["result"]["issues"]]
+        checked = rec["finished_at"] or rec["created_at"]
+    _write("INSERT INTO watchlist(key, company, added_at, last_checked, last_research_id, new_issues, seen) VALUES (?,?,?,?,?,0,?)",
+           (key, company, _now(), checked, baseline_research_id if rec else None, json.dumps(seen, ensure_ascii=False)))
+    return get_watch(company)
+
+
+def remove_watch(company):
+    _write("DELETE FROM watchlist WHERE key = ?", (watch_key(company),))
+
+
+def due_watch(hours, now=None):
+    """Perusahaan yang jadwal riset ulangnya sudah tiba (dan tidak sedang diriset)."""
+    now = now or dt.datetime.now()
+    since = (now - dt.timedelta(hours=hours)).isoformat(timespec="seconds")
+    return _read("SELECT * FROM watchlist WHERE (pending_research_id IS NULL OR pending_research_id = '') "
+                 "AND (last_checked IS NULL OR last_checked <= ?)", (since,))
+
+
+def set_watch_pending(company, rid):
+    _write("UPDATE watchlist SET pending_research_id = ? WHERE key = ?", (rid, watch_key(company)))
+
+
+def watch_after_research(rid):
+    """Dipanggil setelah riset selesai: bandingkan temuan dengan riset pantauan sebelumnya."""
+    rec = get_research(rid)
+    if not rec:
+        return None
+    w = get_watch(rec["company"])
+    if not w or (w["pending_research_id"] and w["pending_research_id"] != rid):
+        return None
+    if rec["status"] != "done" or not rec["result"]:
+        _write("UPDATE watchlist SET pending_research_id = NULL, last_checked = ? WHERE key = ?", (_now(), w["key"]))
+        return 0
+    seen = set(json.loads(w["seen"] or "[]"))
+    first = w["last_research_id"] is None
+    result, new = rec["result"], 0
+    for issue in result["issues"]:
+        k = _issue_key(issue)
+        if not first and k not in seen:
+            issue["new"] = True
+            new += 1
+        seen.add(k)
+    update_research(rid, result=result)
+    _write("UPDATE watchlist SET pending_research_id = NULL, last_checked = ?, last_research_id = ?, new_issues = ?, seen = ? "
+           "WHERE key = ?", (_now(), rid, new, json.dumps(sorted(seen), ensure_ascii=False), w["key"]))
+    return new
+
+
+def clear_watch_new(company):
+    _write("UPDATE watchlist SET new_issues = 0 WHERE key = ?", (watch_key(company),))
+
+
+def clear_stale_watch():
+    _write("UPDATE watchlist SET pending_research_id = NULL")

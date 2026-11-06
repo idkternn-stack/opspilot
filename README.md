@@ -18,6 +18,9 @@ OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot m
 | Progres langsung | Setiap langkah agent tampil di UI saat terjadi |
 | Jejak audit | Semua investigasi, langkah, usulan, dan keputusan tersimpan di database terpisah |
 | Hapus riwayat | Riwayat riset dan investigasi bisa dihapus per item atau semuanya; temuan yang investigasinya dihapus bisa dianalisis ulang |
+| Pantau perusahaan | Perusahaan di daftar pantau diriset ulang otomatis (default tiap 24 jam, `OPSPILOT_WATCH_INTERVAL_HOURS`) dan masalah yang belum pernah terlihat ditandai **Baru** |
+| Laporan analisis | Setiap investigasi bisa diunduh sebagai laporan siap cetak / PDF (kasus, sumber, analisis, usulan tindakan, bukti) |
+| Ringkasan | Halaman utama menampilkan jumlah perusahaan diriset, kasus dianalisis, kasus risiko tinggi, dan tindakan disetujui |
 | Mode rekaman | Bila Gemini sedang sibuk saat demo, investigasi sebelumnya bisa diputar ulang dengan label jelas "rekaman" |
 | Riset perusahaan nyata | Ketik nama perusahaan apa pun; OpsPilot mencari masalah operasional terbarunya lewat Google Search, memverifikasi sumber, menilai dampak, dan merujuk SOP |
 | Analisis kasus nyata | Temuan riset dijadikan anomali yang sama persis dengan masalah aslinya, lalu agent menganalisis dan mengusulkan solusinya |
@@ -141,6 +144,10 @@ Hasil evaluasi tersimpan di `eval/results/` dalam format Markdown dan JSON.
 | POST | `/api/reset` | Kembalikan data demo ke kondisi awal |
 | POST | `/api/runs/delete` | Hapus investigasi (`{"ids": [...]}`, kosong = semua) |
 | POST | `/api/research/delete` | Hapus riwayat riset (`{"ids": [...]}`, kosong = semua) |
+| GET | `/api/runs/{id}/report` | Laporan analisis siap cetak / PDF |
+| POST | `/api/watchlist` | Pantau perusahaan `{"company": "...", "research_id": "..."}` |
+| POST | `/api/watchlist/remove` | Berhenti memantau `{"company": "..."}` |
+| POST | `/api/watchlist/check` | Riset ulang sekarang (satu perusahaan atau semua) |
 
 ## Struktur
 
@@ -154,9 +161,10 @@ backend/
   detect.py     detektor anomali
   scenarios.py  data sintetis dan skenario
   research.py   riset perusahaan lewat Google Search dan verifikasi sumber
-  news.py       cadangan Google News RSS untuk riset
-  simulate.py   simulasi pola kasus nyata ke data demo
-  engine.py     autopilot, antrean, riset, mode rekaman
+  news.py       Google News RSS: cadangan riset dan tool search_news
+  report.py     laporan analisis siap cetak / PDF
+  simulate.py   temuan riset menjadi anomali kasus nyata
+  engine.py     antrean investigasi, riset, pemantauan perusahaan, mode rekaman
   store.py      jejak audit dan rekaman
   main.py       API
   evaluate.py   evaluasi otomatis
@@ -166,6 +174,16 @@ data/recordings/ rekaman investigasi untuk mode cadangan
 tests/          tes offline dengan Gemini tiruan
 ```
 
-## Deploy
+## Deploy (link publik)
 
-Hugging Face Spaces (SDK Docker, port 7860) atau Render. Isi `GEMINI_API_KEY` di Secrets/Environment, bukan di kode.
+Repo ini sudah berisi `render.yaml` (Render) dan `Dockerfile` (Hugging Face Spaces, Railway, atau hosting Docker lain).
+
+**Render (gratis, otomatis update setiap push ke `main`):**
+1. Daftar di [render.com](https://render.com) dengan akun GitHub.
+2. **New +** → **Blueprint** → pilih repo `opspilot`. Render membaca `render.yaml`.
+3. Isi `GEMINI_API_KEY` (wajib) dan `GROQ_API_KEY` (opsional) saat diminta, lalu **Apply**.
+4. Tunggu build selesai (sekitar 3-5 menit). Link publik muncul di dashboard, misalnya `https://opspilot-xxxx.onrender.com`.
+
+Bila tidak memakai Blueprint: **New +** → **Web Service** → pilih repo, Runtime Python, Build command `pip install -r requirements.txt`, Start command `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`, Instance type Free, lalu isi API key di **Environment**.
+
+Catatan paket gratis: server tidur setelah 15 menit tanpa pengunjung (buka pertama butuh sekitar 1 menit), dan riwayat riset/investigasi kembali kosong setiap server restart atau deploy ulang. Siapa pun yang punya link bisa memakai kuota API key, tetapi pembatas permintaan per menit tetap berlaku. API key hanya diisi di dashboard hosting, tidak pernah di kode.

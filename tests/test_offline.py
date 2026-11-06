@@ -295,6 +295,30 @@ def main():
         check(not any(e["kind"] == "tool" and e["data"]["name"] == "run_sql_readonly" for e in case_run["events"]),
               "kasus nyata tidak memakai query SQL ke data toko")
 
+        print("Ringkasan, laporan, dan pemantauan")
+        from backend import report
+        summ = store.summary()
+        check(summ["analyzed"] >= 2 and summ["companies"] >= 1 and summ["pending"] >= 1, "ringkasan menghitung kasus dan tindakan")
+        page = report.render(store.get_run(info["run_id"]))
+        check("Cetak / Simpan PDF" in page and "Sistem distribusi lumpuh" in page and "Langkah penyelesaian" in page,
+              "laporan analisis siap cetak berisi kasus dan usulan tindakan")
+        w = store.add_watch("Albert Heijn", rid)
+        check(w["last_research_id"] == rid and not store.due_watch(24), "perusahaan dipantau dengan riset terakhir sebagai pembanding")
+        seen = json.loads(w["seen"])
+        store._write("UPDATE watchlist SET seen = ? WHERE key = ?", (json.dumps(seen[:1]), w["key"]))
+        started = eng.watch_now("Albert Heijn")
+        deadline = time.time() + 30
+        while time.time() < deadline and store.get_watch("Albert Heijn")["pending_research_id"]:
+            time.sleep(0.1)
+        w2 = store.get_watch("Albert Heijn")
+        new_rec = store.get_research(started[0])
+        check(w2["new_issues"] == 1 and w2["last_research_id"] == started[0] and sum(1 for i in new_rec["result"]["issues"] if i.get("new")) == 1,
+              "riset ulang otomatis menandai masalah yang belum pernah terlihat sebagai baru")
+        store._write("UPDATE watchlist SET last_checked = '2000-01-01T00:00:00'")
+        check(len(store.due_watch(24)) == 1, "jadwal pemantauan jatuh tempo setelah lewat interval")
+        store.remove_watch("Albert Heijn")
+        check(store.list_watch() == [], "berhenti memantau")
+
         print("Hapus riwayat")
         before_runs = len(store.list_runs(100))
         out = store.delete_runs([info["run_id"]])
