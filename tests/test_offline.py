@@ -87,6 +87,7 @@ class FakeAI:
             return {"ringkasan": "Risiko gangguan sistem tinggi.", "temuan": [
                 {"nomor": 1, "relevan": True, "dampak": "Distribusi berhenti", "risiko": "tinggi", "mitigasi": ["Prosedur manual"],
                  "sop": ["sop_data_pos.md"], "skenario": "data_gap", "alasan_skenario": "Sistem mati",
+                 "masalah_singkat": "Sistem distribusi lumpuh akibat serangan siber",
                  "produk_terkait": "AH Produk 5", "gerai_terkait": "AH Gerai 2"},
                 {"nomor": 2, "relevan": False, "alasan_relevansi": "Hanya keluhan pengguna di media sosial", "dampak": "-",
                  "risiko": "rendah", "mitigasi": [], "sop": [], "skenario": "wrong_discount", "alasan_skenario": "-"}],
@@ -257,6 +258,10 @@ def main():
         info = eng.simulate(rid, 1)
         check(store.get_alert(info["alert_id"])["type"] == "data_gap", "simulasi membuat anomali baru beranotasi kasus")
         check(info["alert_id"] == "gap:2", "simulasi memakai gerai yang disebut AI untuk temuan itu")
+        sim_alert = store.get_alert(info["alert_id"])
+        check(sim_alert["title"].startswith("Sistem distribusi lumpuh akibat serangan siber (kasus")
+              and sim_alert["detail"]["simulation"]["detected"].startswith("Data penjualan"),
+              "judul anomali sama dengan masalah aslinya, temuan data detektor tetap dicatat")
         cat = scenarios.current_catalog(config.BUSINESS_DB_PATH)
         check(info["catalog_switched"] and cat["key"].startswith("ahold-delhaize") and cat["products"][0][1] == "AH Produk 1",
               "toko demo diganti ke katalog simulasi perusahaan")
@@ -270,6 +275,43 @@ def main():
             check(False, "temuan bukan masalah operasional tidak bisa disimulasikan")
         except ValueError:
             check(True, "temuan bukan masalah operasional tidak bisa disimulasikan")
+        res_obj = store.get_research(rid)["result"]
+        res_obj["issues"].append({**res_obj["issues"][0], "id": 3, "title": "Gugatan konsumen atas biaya tersembunyi",
+                                  "category": "regulasi", "summary": "Konsumen menggugat 2 biaya tambahan.", "simulated": None,
+                                  "scenario": "case_report", "problem": "Gugatan konsumen atas biaya tersembunyi"})
+        store.update_research(rid, result=res_obj)
+        info3 = eng.simulate(rid, 3)
+        wait_idle(eng)
+        case_run = store.get_run(info3["run_id"])
+        check(store.get_alert(info3["alert_id"])["type"] == "case_report" and case_run["status"] == "done",
+              "masalah tanpa pola data tetap disimulasikan sebagai kasus dan diselesaikan agent")
+        check(any(e["kind"] == "tool" and e["data"]["name"] == "riset_sumber_publik" for e in case_run["events"]),
+              "bukti kasus diambil dari sumber berita publik")
+
+        print("Pola pelanggan: pembayaran, keluhan, pesanan")
+        llm.reset_state()
+        llm.PROVIDERS["gemini"] = FakeAI("gemini", fail="kuota harian habis")
+        for sid, want, avoid in [("tagihan_ganda_surabaya", "refund_payments", None),
+                                 ("pembayaran_gagal_bandung", "create_ticket", "refund_payments"),
+                                 ("keluhan_aplikasi_jakarta", "create_ticket", "transfer_stock"),
+                                 ("pesanan_terlambat_medan", "create_ticket", "pause_promo")]:
+            scenarios.build(config.BUSINESS_DB_PATH, [sid])
+            al = detect.detect_alerts()[0]
+            sk = agent.MemorySink()
+            rr = agent.investigate(al, sk)
+            tools_used = [p["tool"] for p in sk.proposals]
+            check(rr["verified"] and want in tools_used and avoid not in tools_used,
+                  f"{sid}: diagnosis terverifikasi, usul {want}" + (f", tanpa {avoid}" if avoid else ""))
+            if sid == "tagihan_ganda_surabaya":
+                ref = next(p for p in sk.proposals if p["tool"] == "refund_payments")
+                out = tools.execute_action("refund_payments", ref["args"])
+                check(out["refunded"] == 15 and not detect.detect_alerts(), "refund dijalankan, transaksi tertagih hilang dari detektor")
+                try:
+                    tools.validate_action("refund_payments", ref["args"])
+                    check(False, "refund ganda ditolak")
+                except tools.ActionError:
+                    check(True, "refund ganda ditolak")
+
         print("Riset cadangan Google News")
         from backend import news, research
         today = time.strftime("%a, %d %b %Y 03:00:00 GMT")

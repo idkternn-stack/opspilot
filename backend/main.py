@@ -19,6 +19,10 @@ async def lifespan(app):
     db.init_app_db()
     if not os.path.exists(config.BUSINESS_DB_PATH):
         scenarios.build(config.BUSINESS_DB_PATH)
+    elif scenarios.outdated(config.BUSINESS_DB_PATH):  # database versi lama: bangun ulang dengan tabel baru
+        cat = scenarios.current_catalog(config.BUSINESS_DB_PATH)
+        store.archive_alerts()
+        scenarios.build(config.BUSINESS_DB_PATH, catalog=None if cat.get("key") == "default" else scenarios.load_catalog(cat))
     store.mark_stale_runs()
     store.mark_stale_research()
     engine.start()

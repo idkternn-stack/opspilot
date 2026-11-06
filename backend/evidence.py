@@ -27,6 +27,12 @@ class Evidence:
         self.by_key[key] = item
         return item
 
+    def note(self, key, title, tool, result):
+        """Bukti hasil hitungan atau sumber publik (tanpa query), tetap ditampilkan di jejak agent."""
+        item = self.add(key, title, tool, {}, result)
+        self.sink.event("tool", {"name": tool, "args": {}, "result": {"result": result}, "evidence_id": item["id"], "title": title})
+        return item
+
     def run(self, key, title, tool, args):
         self.tool_calls += 1
         try:
@@ -90,6 +96,7 @@ def _context(ev, sid_list, week, recent10):
 def gather(alert, sink, today=None):
     ev = Evidence(alert, sink)
     recent, base, week, recent10 = _dates(today)
+    today_s = (today or dt.date.today()).isoformat()
     t, d = alert["type"], alert.get("detail", {})
     sop_query = "penurunan pendapatan eskalasi"
 
@@ -199,6 +206,80 @@ def gather(alert, sink, today=None):
         _sql(ev, "events", "Kegiatan toko terjadwal (store_events)", f"""
             SELECT store_id, start_date, end_date, event FROM store_events WHERE store_id = {sid}""")
         sop_query = "data penjualan hilang sinkronisasi POS gangguan"
+
+    elif t == "payment_anomaly":
+        sid = int(d["store_id"])
+        _sql(ev, "pay_daily", f"Status transaksi pembayaran harian di {d.get('store')} (7 hari)", f"""
+            SELECT date, COUNT(*) AS total, SUM(status = 'SUCCESS') AS sukses, SUM(status = 'FAILED') AS gagal,
+                   SUM(status = 'DECLINED') AS ditolak,
+                   SUM(status = 'DECLINED' AND charged = 1 AND refunded = 0) AS ditolak_tetap_ditagih
+            FROM payments WHERE store_id = {sid} AND date >= '{week}' GROUP BY date ORDER BY date""")
+        _sql(ev, "pay_method", f"Transaksi bermasalah per metode bayar di {d.get('store')} (3 hari)", f"""
+            SELECT method, COUNT(*) AS total, SUM(status != 'SUCCESS') AS bermasalah FROM payments
+            WHERE store_id = {sid} AND date >= '{recent}' GROUP BY method ORDER BY bermasalah DESC""")
+        _sql(ev, "pay_stores", "Perbandingan dengan gerai lain (3 hari)", f"""
+            SELECT store_id, COUNT(*) AS total, SUM(status = 'FAILED') AS gagal,
+                   SUM(status = 'DECLINED' AND charged = 1 AND refunded = 0) AS ditolak_tetap_ditagih
+            FROM payments WHERE date >= '{recent}' GROUP BY store_id ORDER BY store_id""")
+        if d.get("issue") == "declined_but_charged":
+            rows = _sql(ev, "pay_refund", "Daftar transaksi ditolak tetapi tetap ditagih (belum direfund)", f"""
+                SELECT id, date, method, amount, note FROM payments WHERE store_id = {sid} AND status = 'DECLINED'
+                AND charged = 1 AND refunded = 0 ORDER BY id""")
+            if isinstance(rows, list) and rows:
+                ev.note("refund_total", "Total dana pelanggan yang harus dikembalikan", "hitung_refund",
+                       {"jumlah_transaksi": len(rows), "total_refund": round(sum(r["amount"] for r in rows)),
+                        "payment_ids": [r["id"] for r in rows]})
+            sop_query = "transaksi ditolak tetap ditagih refund rekonsiliasi pembayaran"
+        else:
+            _sql(ev, "pay_failed", "Contoh transaksi gagal (3 hari)", f"""
+                SELECT id, date, method, amount, charged, note FROM payments WHERE store_id = {sid} AND status = 'FAILED'
+                AND date >= '{recent}' ORDER BY id LIMIT 15""")
+            sop_query = "pembayaran gagal payment gateway timeout"
+        _sql(ev, "cmp_pay", "Keluhan pelanggan kategori pembayaran (3 hari)", f"""
+            SELECT date, COUNT(*) AS keluhan FROM complaints WHERE store_id = {sid} AND category = 'pembayaran'
+            AND date >= '{recent}' GROUP BY date ORDER BY date""")
+
+    elif t == "complaint_spike":
+        sid, cat = int(d["store_id"]), str(d.get("category", "")).replace("'", "")
+        _sql(ev, "cmp_daily", f"Keluhan {cat} per hari di {d.get('store')} (7 hari)", f"""
+            SELECT date, COUNT(*) AS keluhan FROM complaints WHERE store_id = {sid} AND category = '{cat}'
+            AND date >= '{week}' GROUP BY date ORDER BY date""")
+        _sql(ev, "cmp_samples", "Contoh isi keluhan terbaru", f"""
+            SELECT date, channel, text FROM complaints WHERE store_id = {sid} AND category = '{cat}'
+            AND date >= '{recent}' ORDER BY date DESC LIMIT 10""")
+        _sql(ev, "cmp_stores", f"Keluhan {cat} di semua gerai (3 hari)", f"""
+            SELECT store_id, COUNT(*) AS keluhan FROM complaints WHERE category = '{cat}' AND date >= '{recent}'
+            GROUP BY store_id ORDER BY store_id""")
+        _sql(ev, "cross_check", f"Cek silang pembayaran dan pesanan di {d.get('store')} (3 hari)", f"""
+            SELECT (SELECT COUNT(*) FROM payments WHERE store_id = {sid} AND date >= '{recent}' AND status != 'SUCCESS') AS transaksi_bermasalah,
+                   (SELECT COUNT(*) FROM orders WHERE store_id = {sid} AND promised_date >= '{recent}' AND status = 'TERLAMBAT') AS pesanan_terlambat""")
+        sop_query = f"lonjakan keluhan pelanggan {cat} eskalasi"
+
+    elif t == "order_delay":
+        sid = int(d["store_id"])
+        _sql(ev, "ord_daily", f"Pesanan jatuh tempo vs terlambat di {d.get('store')} (7 hari)", f"""
+            SELECT promised_date, COUNT(*) AS jatuh_tempo, SUM(status = 'TERLAMBAT') AS terlambat FROM orders
+            WHERE store_id = {sid} AND promised_date >= '{week}' AND promised_date < '{today_s}'
+            GROUP BY promised_date ORDER BY promised_date""")
+        _sql(ev, "ord_courier", f"Keterlambatan per kurir di {d.get('store')} (3 hari)", f"""
+            SELECT courier, COUNT(*) AS pesanan, SUM(status = 'TERLAMBAT') AS terlambat FROM orders
+            WHERE store_id = {sid} AND promised_date >= '{recent}' GROUP BY courier ORDER BY terlambat DESC""")
+        _sql(ev, "ord_late", "Daftar pesanan terlambat", f"""
+            SELECT o.id, o.order_date, p.name AS product, o.qty, o.promised_date, o.courier FROM orders o
+            JOIN products p ON p.id = o.product_id WHERE o.store_id = {sid} AND o.status = 'TERLAMBAT'
+            AND o.promised_date >= '{recent}' ORDER BY o.promised_date LIMIT 20""")
+        _sql(ev, "ord_stores", "Keterlambatan di gerai lain (3 hari)", f"""
+            SELECT store_id, COUNT(*) AS pesanan, SUM(status = 'TERLAMBAT') AS terlambat FROM orders
+            WHERE promised_date >= '{recent}' AND promised_date < '{today_s}' GROUP BY store_id ORDER BY store_id""")
+        sop_query = "pesanan pelanggan terlambat kurir logistik"
+
+    elif t == "case_report":
+        case = d.get("case") or {}
+        ev.note("case", "Kasus dari sumber berita publik", "riset_sumber_publik",
+               {"judul": case.get("title"), "tanggal": case.get("date"), "kategori": case.get("category"),
+                "ringkasan": case.get("summary"), "dampak_operasional": case.get("impact"),
+                "mitigasi_awal": case.get("mitigation"), "sumber": case.get("sources")})
+        sop_query = f"{case.get('category', '')} {case.get('title', '')} {case.get('summary', '')} eskalasi"
 
     ev.run("sop", "Prosedur yang relevan (RAG atas SOP)", "search_sop", {"query": sop_query, "k": 2})
     return ev

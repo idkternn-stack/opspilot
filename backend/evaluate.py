@@ -1,6 +1,6 @@
 """Evaluasi otomatis OpsPilot.
 
-Setiap skenario dibangun di database terpisah, detektor dijalankan, lalu agent menginvestigasi.
+Setiap skenario (13) dibangun di database terpisah, detektor dijalankan, lalu agent menginvestigasi.
 Hasil dinilai otomatis:
 - terdeteksi       : detektor menghasilkan jenis anomali yang diharapkan
 - diagnosis benar  : ringkasan agent memuat kata kunci akar masalah (setiap grup minimal satu kata)

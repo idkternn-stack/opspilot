@@ -28,7 +28,12 @@ SCENARIO_LABELS = {
     "demand_drop": "Permintaan turun, stok menumpuk",
     "data_gap": "Gangguan sistem POS, data penjualan hilang",
     "store_closure": "Toko tutup sementara",
-    "none": "Tidak bisa disimulasikan di data toko",
+    "payment_error": "Transaksi ditolak/gagal tetapi dana pelanggan tetap ditagih",
+    "payment_outage": "Pembayaran gagal massal (gangguan payment gateway)",
+    "complaint_spike": "Lonjakan keluhan pelanggan",
+    "order_delay": "Pesanan pelanggan terlambat dikirim",
+    "case_report": "Kasus ditangani langsung dari sumber berita",
+    "none": "Tidak bisa disimulasikan",
 }
 RISKS = ("tinggi", "sedang", "rendah")
 SOCIAL_DOMAINS = ("threads.", "x.com", "twitter.", "tiktok.", "facebook.", "instagram.", "reddit.", "youtube.",
@@ -82,17 +87,24 @@ Untuk setiap temuan, nilai:
 - risiko: tinggi, sedang, atau rendah
 - mitigasi: 2-4 langkah konkret, sesuai SOP bila ada
 - sop: daftar nama file SOP yang dirujuk (boleh kosong)
-- skenario: jenis skenario data toko yang paling mirip untuk disimulasikan, salah satu dari:
+- masalah_singkat: inti masalahnya dalam maksimal 12 kata, netral, tanpa nama perusahaan dan tanpa angka rupiah
+  (contoh: "Transaksi kartu kredit ditolak tetapi tetap ditagih ke pelanggan"). Ini menjadi judul anomali.
+- skenario: pola data yang SAMA dengan masalahnya untuk disimulasikan di toko demo, salah satu dari:
   {scenarios}
-  Aturan pemilihan (pilih "none" bila tidak ada yang benar-benar cocok atau relevan=false):
+  Aturan pemilihan (pola harus sama dengan masalah aslinya, bukan sekadar mirip):
   stockout_delay = stok habis karena pasokan/pengiriman terlambat; supplier_delay = satu pemasok terlambat ke banyak gerai;
   wrong_discount = HANYA kesalahan harga/diskon yang membuat harga terlalu murah atau di bawah modal (keluhan harga
   terlalu mahal BUKAN wrong_discount); demand_spike = permintaan naik tajam; demand_drop = permintaan/penjualan turun;
   data_gap = gangguan sistem, aplikasi, atau serangan siber yang membuat transaksi/data tidak tercatat;
-  store_closure = gerai tutup sementara.
+  store_closure = gerai tutup sementara;
+  payment_error = transaksi ditolak/gagal/dibatalkan tetapi dana pelanggan tetap terpotong, tagihan ganda, atau penagihan
+  tidak sah; payment_outage = pembayaran tidak bisa diproses/gagal massal; complaint_spike = keluhan pelanggan melonjak
+  (aplikasi error/down, layanan buruk, kualitas produk, akun dibobol, kebocoran data, penipuan); order_delay = pesanan
+  atau paket pelanggan terlambat/tidak sampai; case_report = masalah relevan yang tidak tampak di data toko (gugatan,
+  sanksi, keuangan, PHK, dll). "none" HANYA bila relevan=false.
+- kategori_keluhan: isi bila skenario complaint_spike, salah satu: aplikasi, pembayaran, pengiriman, produk, layanan, keamanan_data
 - produk_terkait: nama produk di katalog yang paling terkait dengan temuan (wajib ada di katalog bila skenario bukan none)
 - gerai_terkait: nama gerai di katalog yang paling terkait (boleh kosong)
-  Pilih "none" bila masalahnya tidak tampak di data penjualan/stok toko (misalnya murni hukum atau keuangan).
 - alasan_skenario: satu kalimat alasan pemilihan skenario
 
 Susun juga katalog SIMULASI untuk toko demo yang mencerminkan bisnis {company}: tepat 4 toko/gerai (nama dan kota yang
@@ -104,7 +116,8 @@ terjual per gerai per hari (3 sampai 120, kecil untuk barang mewah, besar untuk 
 Balas HANYA JSON dengan bentuk:
 {{"ringkasan": "<2-3 kalimat gambaran risiko keseluruhan>",
   "temuan": [{{"nomor": 1, "relevan": true, "alasan_relevansi": "...", "dampak": "...", "risiko": "tinggi",
-              "mitigasi": ["..."], "sop": ["sop_x.md"], "skenario": "stockout_delay", "alasan_skenario": "...",
+              "mitigasi": ["..."], "sop": ["sop_x.md"], "masalah_singkat": "...", "skenario": "payment_error",
+              "kategori_keluhan": "", "alasan_skenario": "...",
               "produk_terkait": "nama produk di katalog", "gerai_terkait": "nama gerai di katalog"}}],
   "katalog": {{"toko": [{{"nama": "...", "kota": "..."}}],
               "produk": [{{"nama": "...", "kategori": "...", "harga": 0, "harga_pokok": 0, "qty_harian": 0}}]}}}}"""
@@ -215,7 +228,24 @@ def verify(issues, today=None):
 
 
 CATEGORY_SCENARIO = {"stok_pasokan": "stockout_delay", "distribusi": "supplier_delay", "harga_promo": "wrong_discount",
-                     "sistem_data": "data_gap", "permintaan": "demand_spike", "penutupan_toko": "store_closure"}
+                     "sistem_data": "data_gap", "permintaan": "demand_spike", "penutupan_toko": "store_closure",
+                     "recall": "complaint_spike"}
+KEYWORD_SCENARIO = [  # dicek berurutan, sebelum kategori
+    (("ditagih", "tagihan", "terpotong", "dibebankan", "charged", "double charge", "refund", "penagihan"), "payment_error"),
+    (("gagal bayar", "pembayaran gagal", "payment gateway", "tidak bisa bayar", "payment fail"), "payment_outage"),
+    (("paket", "pesanan terlambat", "kurir", "belum sampai", "delivery delay", "late deliver"), "order_delay"),
+    (("aplikasi", "app down", "server down", "outage", "error", "login", "bocor", "breach", "akun dibobol", "akun diretas",
+      "penipuan", "keluhan", "complain", "recall", "ditarik", "kualitas"), "complaint_spike"),
+]
+COMPLAINT_WORDS = [(("bocor", "breach", "akun dibobol", "akun diretas", "penipuan", "hack", "siber"), "keamanan_data"),
+                   (("recall", "ditarik", "kualitas", "rusak", "cacat"), "produk"),
+                   (("bayar", "tagih", "payment"), "pembayaran"), (("kirim", "paket", "kurir"), "pengiriman"),
+                   (("aplikasi", "app", "down", "error", "login", "website"), "aplikasi")]
+
+
+def complaint_category(text):
+    text = text.lower()
+    return next((cat for words, cat in COMPLAINT_WORDS if any(w in text for w in words)), "layanan")
 DROP_WORDS = ("turun", "menurun", "anjlok", "lesu", "melemah", "decline", "drop", "falling", "losing", "plummet", "slump", "weak")
 
 
@@ -231,13 +261,15 @@ def _sops_for(issues):
 def _fallback_analysis(issues, docs):
     """Dipakai bila semua model AI tidak bisa dipakai: skenario dipilih dari kategori temuan."""
     for issue in issues:
-        sc = CATEGORY_SCENARIO.get(issue["category"], "none")
         text = f"{issue['title']} {issue['summary']}".lower()
+        sc = next((s for words, s in KEYWORD_SCENARIO if any(w in text for w in words)), None)
+        sc = sc or CATEGORY_SCENARIO.get(issue["category"], "case_report")
         if sc == "demand_spike" and any(w in text for w in DROP_WORDS):
             sc = "demand_drop"
-        issue.update(scenario=sc, scenario_label=SCENARIO_LABELS[sc],
+        issue.update(problem=issue["title"][:90], complaint_category=complaint_category(text) if sc == "complaint_spike" else "",
+                     scenario=sc, scenario_label=SCENARIO_LABELS[sc],
                      scenario_reason="Dipilih dari kategori temuan (analisis AI tidak tersedia).",
-                     sop=sorted(docs)[:1] if sc != "none" else [])
+                     sop=sorted(docs)[:1])
 
 
 def analyze(company, issues, sink):
@@ -256,12 +288,19 @@ def analyze(company, issues, sink):
     by_no = {int(t.get("nomor", 0)): t for t in data.get("temuan", []) if str(t.get("nomor", "")).isdigit()}
     for issue in issues:
         a = by_no.get(issue["id"], {})
-        scenario = a.get("skenario") if a.get("skenario") in SCENARIO_LABELS else "none"
+        scenario = a.get("skenario") if a.get("skenario") in SCENARIO_LABELS else "case_report"
         relevant = a.get("relevan") is not False
+        if relevant and scenario == "none":
+            scenario = "case_report"
         if not relevant:
             scenario = "none"
             issue["flags"] = issue.get("flags", []) + ["Bukan masalah operasional perusahaan"]
+        cat = str(a.get("kategori_keluhan") or "").strip().lower()
+        text = f"{issue['title']} {issue['summary']}"
         issue.update(
+            problem=re.sub(r"\s+", " ", str(a.get("masalah_singkat") or "")).strip()[:90] or issue["title"][:90],
+            complaint_category=(cat if cat in scenarios.COMPLAINT_CATEGORIES else complaint_category(text))
+                               if scenario == "complaint_spike" else "",
             relevant=relevant, relevance_reason=str(a.get("alasan_relevansi", "")).strip(),
             target={"product": str(a.get("produk_terkait") or "").strip()[:60], "store": str(a.get("gerai_terkait") or "").strip()[:60]},
             impact=str(a.get("dampak", "")).strip(),

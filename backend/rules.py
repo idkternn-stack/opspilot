@@ -7,6 +7,14 @@ Bentuk keluarannya sama dengan jawaban AI sehingga diverifikasi dan diproses den
 from . import tools
 
 
+TEAM_BY_COMPLAINT = {"aplikasi": "IT & Product Engineering", "pembayaran": "Finance & Payment Operations",
+                     "pengiriman": "Logistik", "produk": "Quality Control", "layanan": "Customer Service",
+                     "keamanan_data": "IT Security"}
+TEAM_BY_CATEGORY = {"keuangan": "Finance", "regulasi": "Legal & Compliance", "recall": "Quality Control",
+                    "sistem_data": "IT Security", "stok_pasokan": "Supply Chain", "distribusi": "Logistik",
+                    "harga_promo": "Pricing Team", "penutupan_toko": "Operations Manager", "permintaan": "Merchandising"}
+
+
 def _rupiah(x):
     return f"Rp{int(round(x or 0)):,}".replace(",", ".")
 
@@ -233,6 +241,102 @@ def diagnose(alert, ev):
              "hasil": f"Data penjualan {d.get('store')} lengkap kembali"},
             {"tool": "send_notification", "args": {"to": f"Store Manager {d.get('store')}",
              "message": "Simpan bukti transaksi manual sampai data tersinkron."}, "alasan": "SOP data POS poin 4"}]
+    elif t == "payment_anomaly":
+        store = d.get("store")
+        if d.get("issue") == "declined_but_charged":
+            tot = (ev.by_key.get("refund_total") or {}).get("result") or {}
+            ids = tot.get("payment_ids") or []
+            out["akar_masalah"] = (f"{d.get('declined_charged')} transaksi kartu di {store} ditolak oleh bank/payment gateway, "
+                                   "tetapi dana pelanggan tetap ditagih sehingga pelanggan membayar untuk transaksi yang gagal.")
+            out["bukti"].append({"klaim": f"{d.get('declined_charged')} transaksi berstatus DECLINED tetapi charged=1 dan belum direfund, "
+                                          f"total {_rupiah(d.get('declined_charged_amount'))}", "ref": eid("alert")})
+            if ids:
+                out["bukti"].append({"klaim": f"Daftar {tot['jumlah_transaksi']} transaksi yang harus direfund, total {tot['total_refund']}",
+                                     "ref": eid("refund_total")})
+            out["dampak"] = f"Pelanggan dirugikan {_rupiah(d.get('declined_charged_amount'))}; risiko komplain, chargeback, dan sanksi."
+            out["tindakan"] += [
+                {"tool": "refund_payments", "args": {"store_id": d["store_id"], "payment_ids": ids,
+                 "reason": "Transaksi ditolak tetapi dana tetap ditagih"}, "alasan": "SOP pembayaran poin 2"},
+                {"tool": "create_ticket", "args": {"title": f"Rekonsiliasi transaksi ditolak-tapi-ditagih {store}", "priority": "HIGH",
+                 "description": "Transaksi DECLINED tetapi dana pelanggan terpotong."}, "alasan": "SOP pembayaran poin 3",
+                 "pic": "Finance & Payment Operations", "langkah": [
+                    "Cocokkan daftar transaksi dengan laporan settlement bank/payment gateway",
+                    "Minta bank/payment gateway membatalkan penagihan yang tidak sah",
+                    "Perbaiki logika status transaksi agar transaksi ditolak tidak diteruskan ke penagihan",
+                    "Pantau transaksi kartu kredit 7 hari ke depan sampai tidak ada kasus baru"],
+                 "hasil": "Tidak ada lagi transaksi DECLINED yang tertagih"},
+                {"tool": "send_notification", "args": {"to": "Pelanggan terdampak",
+                 "message": "Transaksi Anda ditolak tetapi sempat ditagih. Dana sedang dikembalikan dalam 1x24 jam."},
+                 "alasan": "SOP pembayaran poin 4"}]
+        else:
+            out["akar_masalah"] = (f"Pembayaran di {store} gagal {d.get('recent_failed_pct')}% (normal {d.get('baseline_failed_pct')}%) "
+                                   "karena gangguan payment gateway; dana pelanggan tidak terpotong.")
+            out["bukti"].append({"klaim": f"Tingkat gagal bayar {d.get('recent_failed_pct')}% dibanding normal {d.get('baseline_failed_pct')}%",
+                                 "ref": eid("alert")})
+            out["dampak"] = "Penjualan hilang karena pelanggan tidak bisa membayar; tidak perlu refund karena dana tidak terpotong."
+            out["tindakan"] += [
+                {"tool": "create_ticket", "args": {"title": f"Gangguan payment gateway di {store}", "priority": "HIGH",
+                 "description": "Transaksi gagal karena timeout payment gateway."}, "alasan": "SOP pembayaran poin 5",
+                 "pic": "IT Payment", "langkah": ["Cek status dan log error payment gateway", "Alihkan ke gateway cadangan bila gangguan berlanjut",
+                 "Uji transaksi di semua metode bayar setelah perbaikan"], "hasil": "Tingkat gagal bayar kembali di bawah 5%"},
+                {"tool": "send_notification", "args": {"to": f"Store Manager dan Customer Service {store}",
+                 "message": "Pembayaran sedang terganggu. Arahkan pelanggan ke metode bayar lain sementara."}, "alasan": "SOP pembayaran poin 5"}]
+
+    elif t == "complaint_spike":
+        cat, store = d.get("category", "layanan"), d.get("store")
+        team = TEAM_BY_COMPLAINT.get(cat, "Customer Service")
+        samples = ev.rows("cmp_samples")
+        out["akar_masalah"] = (f"Keluhan {cat.replace('_', ' ')} di {store} melonjak dari {d.get('baseline_per_day')} menjadi "
+                               f"{d.get('recent_per_day')} per hari" + (f"; isi keluhan dominan: \"{samples[0]['text']}\"." if samples else "."))
+        out["bukti"].append({"klaim": f"Keluhan naik dari {d.get('baseline_per_day')} menjadi {d.get('recent_per_day')} per hari",
+                             "ref": eid("alert")})
+        if samples:
+            out["bukti"].append({"klaim": f"Contoh keluhan: {samples[0]['text']}", "ref": eid("cmp_samples")})
+        out["tindakan"] += [
+            {"tool": "create_ticket", "args": {"title": f"Lonjakan keluhan {cat.replace('_', ' ')} di {store}", "priority": "HIGH",
+             "description": samples[0]["text"] if samples else "Lonjakan keluhan pelanggan."}, "alasan": "SOP keluhan poin 2",
+             "pic": team, "langkah": [f"{team} mereproduksi masalah yang dikeluhkan pelanggan",
+             "Perbaiki penyebab utama dan uji ulang", "Customer Service menghubungi pelanggan yang mengeluh dengan solusi",
+             "Pantau jumlah keluhan harian sampai kembali normal"], "hasil": f"Keluhan {cat.replace('_', ' ')} kembali ke level normal"},
+            {"tool": "send_notification", "args": {"to": "Customer Service", "message": "Gunakan template jawaban resmi dan catat setiap keluhan terkait."},
+             "alasan": "SOP keluhan poin 3"}]
+
+    elif t == "order_delay":
+        store = d.get("store")
+        couriers = ev.rows("ord_courier")
+        worst = couriers[0] if couriers else {}
+        out["akar_masalah"] = (f"{d.get('late_orders')} dari {d.get('orders_due')} pesanan pelanggan {store} terlambat"
+                               + (f", mayoritas lewat {worst['courier']} ({worst['terlambat']} pesanan)." if worst else "."))
+        out["bukti"].append({"klaim": f"{d.get('late_orders')} dari {d.get('orders_due')} pesanan terlambat ({d.get('recent_late_pct')}%)",
+                             "ref": eid("alert")})
+        if worst:
+            out["bukti"].append({"klaim": f"{worst['courier']}: {worst['terlambat']} dari {worst['pesanan']} pesanan terlambat",
+                                 "ref": eid("ord_courier")})
+        out["tindakan"] += [
+            {"tool": "create_ticket", "args": {"title": f"Keterlambatan pengiriman {store}", "priority": "HIGH",
+             "description": f"Kurir bermasalah: {worst.get('courier', '-')}"}, "alasan": "SOP pengiriman poin 2",
+             "pic": "Logistik", "langkah": [f"Hubungi {worst.get('courier', 'kurir')} untuk status setiap paket terlambat",
+             "Alihkan pesanan baru ke kurir lain sampai kinerja pulih", "Prioritaskan pengiriman ulang pesanan yang paling lama tertunda",
+             "Tagih penalti SLA sesuai kontrak kurir"], "hasil": "Keterlambatan pesanan kembali di bawah 10%"},
+            {"tool": "send_notification", "args": {"to": "Pelanggan dengan pesanan terlambat",
+             "message": "Pesanan Anda terlambat. Kami sedang mempercepat pengiriman dan akan mengabari estimasi barunya."},
+             "alasan": "SOP pengiriman poin 3"}]
+
+    elif t == "case_report":
+        case = d.get("case") or {}
+        team = TEAM_BY_CATEGORY.get(case.get("category"), "Operations Manager")
+        out["akar_masalah"] = case.get("summary") or case.get("title") or "-"
+        out["bukti"].append({"klaim": case.get("summary") or case.get("title") or "-", "ref": eid("case")})
+        out["dampak"] = case.get("impact") or ""
+        steps = [str(m) for m in (case.get("mitigation") or [])][:5] or ["Verifikasi fakta kasus dengan tim internal",
+                                                                         "Tetapkan langkah perbaikan dan PIC", "Laporkan progres ke manajemen"]
+        out["tindakan"] += [
+            {"tool": "create_ticket", "args": {"title": f"Tindak lanjut kasus: {(case.get('title') or '')[:80]}", "priority": "HIGH",
+             "description": case.get("summary") or ""}, "alasan": "SOP kasus publik poin 2", "pic": team, "langkah": steps,
+             "hasil": "Penyebab kasus ditangani dan tidak terulang"},
+            {"tool": "send_notification", "args": {"to": "Manajemen dan Komunikasi Korporat",
+             "message": f"Kasus publik: {case.get('title', '')}. Siapkan pernyataan resmi dan pantau perkembangan."},
+             "alasan": "SOP kasus publik poin 3"}]
     else:
         out["akar_masalah"] = "Jenis anomali belum punya aturan diagnosis."
     if loss and not out["dampak"]:

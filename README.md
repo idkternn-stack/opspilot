@@ -2,7 +2,7 @@
 
 **AI agent otonom untuk investigasi anomali operasional retail.** GTNIC 2026, sub tema Enterprise Productivity.
 
-OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot mengumpulkan bukti lewat tool (SQL read-only, estimasi kerugian, RAG atas SOP), lalu AI (**Gemini**, dengan **Groq** sebagai cadangan opsional) menalar akar masalah dan mengusulkan tindakan yang benar-benar mengubah data (transfer stok, hentikan promo, tiket, notifikasi). Setiap angka dalam kesimpulan AI diverifikasi kode terhadap bukti. Desainnya hemat kuota: 1-2 panggilan AI per investigasi, sehingga tetap jalan di API gratis. Tidak ada tindakan yang dijalankan tanpa persetujuan manusia.
+OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot mengumpulkan bukti lewat tool (SQL read-only, estimasi kerugian, RAG atas SOP), lalu AI (**Gemini**, dengan **Groq** sebagai cadangan opsional) menalar akar masalah dan mengusulkan tindakan yang benar-benar mengubah data (transfer stok, hentikan promo, refund pelanggan, tiket, notifikasi). Setiap angka dalam kesimpulan AI diverifikasi kode terhadap bukti. Desainnya hemat kuota: 1-2 panggilan AI per investigasi, sehingga tetap jalan di API gratis. Tidak ada tindakan yang dijalankan tanpa persetujuan manusia.
 
 ## Fitur utama
 
@@ -13,14 +13,14 @@ OpsPilot memantau data toko secara berkala. Begitu menemukan anomali, OpsPilot m
 | Verifikasi berbasis kode | Setiap angka di klaim AI dicocokkan dengan bukti yang dirujuk; bila tidak cocok, AI diminta memperbaiki satu kali |
 | Multi-penyedia AI | Gemini (utama) dan Groq (cadangan opsional), pembatas permintaan per menit, pindah otomatis saat kuota habis |
 | Mode tanpa AI | Bila semua model AI habis kuota, diagnosis berbasis aturan tetap berjalan dengan label jelas |
-| Aksi nyata dengan persetujuan | `transfer_stock` dan `pause_promo` mengubah database setelah disetujui, lalu hasilnya diverifikasi |
+| Aksi nyata dengan persetujuan | `transfer_stock`, `pause_promo`, dan `refund_payments` mengubah database setelah disetujui, lalu hasilnya diverifikasi |
 | Usulan tindakan lengkap | Setiap usulan memuat alasan (merujuk ID bukti), 2-5 langkah penyelesaian, PIC, target waktu sesuai prioritas, dan kriteria masalah dianggap selesai |
 | Progres langsung | Setiap langkah agent tampil di UI saat terjadi |
 | Jejak audit | Semua investigasi, langkah, usulan, dan keputusan tersimpan di database terpisah |
 | Mode rekaman | Bila Gemini sedang sibuk saat demo, investigasi sebelumnya bisa diputar ulang dengan label jelas "rekaman" |
 | Riset perusahaan nyata | Ketik nama perusahaan apa pun; OpsPilot mencari masalah operasional terbarunya lewat Google Search, memverifikasi sumber, menilai dampak, dan merujuk SOP |
-| Simulasi kasus nyata | Temuan riset bisa disimulasikan di data toko demo, lalu diinvestigasi agent seperti anomali biasa |
-| Evaluasi otomatis | 8 skenario dengan akar masalah diketahui; akurasi diagnosis, ketepatan aksi, keamanan, dan waktu diukur otomatis |
+| Simulasi kasus nyata | Temuan riset disimulasikan di toko demo dengan judul anomali yang sama dengan masalah aslinya, lalu diselesaikan agent |
+| Evaluasi otomatis | 13 skenario dengan akar masalah diketahui; akurasi diagnosis, ketepatan aksi, keamanan, dan waktu diukur otomatis |
 
 ## Arsitektur
 
@@ -39,7 +39,7 @@ flowchart LR
   A -->|estimate_loss| DB
   A -->|usulan aksi| V{Validasi}
   V --> H{Persetujuan manusia}
-  H -->|disetujui| X[transfer_stock, pause_promo,<br/>tiket, notifikasi]
+  H -->|disetujui| X[transfer_stock, pause_promo,<br/>refund_payments, tiket, notifikasi]
   X --> DB
   A --> L[(Jejak audit<br/>app.db)]
   L --> UI
@@ -49,8 +49,8 @@ flowchart LR
 |---|---|
 | LLM | Gemini (Google GenAI SDK) + Groq opsional (OpenAI-compatible API), keluaran JSON terstruktur, pembatas per menit, fallback otomatis |
 | Backend | Python, FastAPI, thread worker dan monitor |
-| Data | SQLite: data toko sintetis 30 hari (4 toko, 8 produk) + database audit terpisah |
-| RAG | TF-IDF (scikit-learn) atas 6 dokumen SOP di `data/sop` |
+| Data | SQLite: data toko sintetis 30 hari (4 gerai, 8 produk, penjualan, stok, pembayaran, pesanan, dan keluhan pelanggan) + database audit terpisah |
+| RAG | TF-IDF (scikit-learn) atas 10 dokumen SOP di `data/sop` |
 | Frontend | HTML + JavaScript tanpa framework, polling progres tiap detik |
 
 ## Riset perusahaan nyata
@@ -58,7 +58,21 @@ flowchart LR
 1. **Cari:** Gemini dengan Grounding with Google Search menulis temuan dalam format tetap (judul, tanggal, kategori, ringkasan).
 2. **Verifikasi (kode, bukan LLM):** setiap temuan dipetakan ke sumbernya lewat metadata grounding. Temuan tanpa sumber dibuang. Temuan yang sumbernya hanya media sosial ditandai "belum terkonfirmasi". Tanggal lebih dari 180 hari atau di masa depan ditandai.
 3. **Analisis:** dampak operasional, tingkat risiko, mitigasi sesuai SOP (RAG), jenis skenario yang paling mirip, serta produk dan gerai yang disebut di temuan. AI juga menilai relevansi: artikel opini, kisah sukses, tips, atau promo ditandai "Bukan masalah operasional perusahaan" dan tidak bisa disimulasikan.
-4. **Simulasi:** pola masalahnya diterapkan ke data toko demo, pada produk dan gerai yang paling cocok dengan temuan (misalnya temuan soal buku disimulasikan pada produk buku, bukan produk acak). Injeksi dicoba dulu di salinan database dan baru diterapkan bila detektor benar-benar menghasilkan anomali baru. Anomali diberi label "simulasi kasus <perusahaan>" dan langsung diinvestigasi.
+4. **Simulasi:** masalah yang sama diterapkan ke data toko demo, pada produk dan gerai yang paling cocok dengan temuan. Judul anomali = masalah aslinya (misalnya "Transaksi kartu kredit ditolak tetapi tetap ditagih (kasus Tokopedia)"), dan temuan detektor di data demo ditampilkan di bawahnya. Injeksi dicoba dulu di salinan database dan baru diterapkan bila detektor benar-benar menghasilkan anomali baru.
+5. **Kasus tanpa pola data:** masalah yang relevan tetapi tidak tampak di data toko (gugatan, sanksi, keuangan) tetap bisa ditangani: anomali dibuat langsung dari temuan, agent menalar dari sumber berita dan SOP, lalu mengusulkan tiket dan notifikasi ke tim yang tepat.
+
+| Pola simulasi | Contoh masalah nyata | Data yang dipakai agent |
+|---|---|---|
+| Stok habis, pemasok terlambat | kelangkaan, gangguan pasokan | `sales`, `inventory`, `deliveries` |
+| Kesalahan harga/diskon | harga terlalu murah, di bawah modal | `promotions`, `products` |
+| Permintaan naik/turun | lonjakan atau penurunan penjualan | `sales`, `inventory` |
+| Gangguan POS | transaksi tidak tercatat | `pos_sync_log`, `sales` |
+| Transaksi ditolak tetapi ditagih | tagihan ganda, dana terpotong | `payments` (status, charged, refunded) |
+| Pembayaran gagal massal | payment gateway down | `payments` |
+| Lonjakan keluhan | aplikasi error, akun dibobol, produk rusak | `complaints` |
+| Pesanan terlambat | paket tidak sampai, kurir bermasalah | `orders` |
+| Toko tutup | penutupan gerai | `store_events` |
+| Kasus dari berita | gugatan, sanksi, keuangan | sumber berita + SOP |
 
 **Katalog simulasi per perusahaan:** saat analisis riset, AI sekalian menyusun katalog simulasi (4 gerai dan 8 produk khas perusahaan, harga perkiraan dalam rupiah). Saat temuan disimulasikan, toko demo diganti ke katalog itu (anomali katalog lama diarsipkan, riwayat tetap ada), sehingga simulasi Hermès memakai produk seperti tas dan syal, bukan sembako. Bila katalog tidak tersedia, toko sembako default dipakai.
 
@@ -78,6 +92,10 @@ Temuan selalu berasal dari sumber publik, bukan data internal perusahaan. Nama p
 | `lonjakan_medan_mie` | Permintaan melonjak, stok menipis | Transfer stok atau tiket |
 | `data_pos_jakarta` | Data hilang karena sinkronisasi POS gagal | Tiket IT, tanpa aksi stok/harga |
 | `permintaan_turun_jakarta_sabun` | Permintaan turun, stok menumpuk | Tunda pesanan, transfer ke toko yang masih laku |
+| `tagihan_ganda_surabaya` | Transaksi kartu ditolak tetapi dana tetap ditagih | Refund pelanggan + tiket Finance |
+| `pembayaran_gagal_bandung` | Pembayaran gagal massal, dana tidak terpotong | Tiket IT Payment, tanpa refund |
+| `keluhan_aplikasi_jakarta` | Keluhan aplikasi error melonjak | Tiket IT & Product |
+| `pesanan_terlambat_medan` | Satu mitra kurir membuat pesanan terlambat | Tiket Logistik + notifikasi pelanggan |
 | `toko_tutup_surabaya` | Pendapatan turun karena renovasi terjadwal | Tidak perlu tindakan korektif |
 
 Data toko demo dimulai **bersih tanpa anomali**. Alur demo: riset perusahaan nyata, simulasikan temuannya, lalu agent menyelesaikannya. Skenario di tabel ini dipakai evaluasi (dijalankan satu per satu) dan tes offline.

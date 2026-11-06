@@ -27,6 +27,10 @@ EXPECTED = {
     "demand_drop": ("sales_drop",),
     "data_gap": ("data_gap",),
     "store_closure": ("revenue_drop",),
+    "payment_error": ("payment_anomaly",),
+    "payment_outage": ("payment_anomaly",),
+    "complaint_spike": ("complaint_spike",),
+    "order_delay": ("order_delay",),
 }
 
 
@@ -54,7 +58,7 @@ def candidates(kind):
     elif kind == "demand_drop":
         for p, s in itertools.product([2, 1, 4, 3, 6, 5, 8, 7], STORE_IDS):
             yield {"store": s, "product": p}
-    elif kind in ("data_gap", "store_closure"):
+    elif kind in ("data_gap", "store_closure") + scenarios.EXTRA_KINDS:
         for s in (3, 4, 2, 1):
             yield {"store": s}
     else:
@@ -109,6 +113,8 @@ def apply(con, kind, p, note, today=None):
     elif kind == "store_closure":
         con.execute("UPDATE sales SET qty = 0 WHERE store_id = ? AND date IN (?, ?)", (p["store"], d(1), d(2)))
         con.execute("INSERT INTO store_events VALUES (?,?,?,?)", (p["store"], d(2), d(1), f"Toko tutup sementara ({note})"))
+    elif kind in scenarios.EXTRA_KINDS:
+        scenarios.apply_extra(con, kind, p, note, today, case_text=p.get("case_text", ""))
     else:
         raise SimulationError("Jenis masalah ini tidak bisa disimulasikan di data toko.")
 
@@ -157,7 +163,7 @@ def _order(cands, prefer):
     return sorted(cands, key=score)
 
 
-def inject(kind, note, prefer=None):
+def inject(kind, note, prefer=None, extra=None):
     """Mencari target yang menghasilkan anomali baru, lalu menerapkannya ke database demo."""
     if kind not in EXPECTED:
         raise SimulationError("Jenis masalah ini tidak bisa disimulasikan di data toko.")
@@ -173,6 +179,7 @@ def inject(kind, note, prefer=None):
     try:
         trial = os.path.join(tmpdir, "trial.db")
         for params in _order(list(candidates(kind)), prefer):
+            params.update(extra or {})
             if kind in ("data_gap", "store_closure") and params["store"] in busy_stores:
                 continue  # jangan menumpuk dua masalah tingkat toko di gerai yang sama
             _copy_db(config.BUSINESS_DB_PATH, trial)
@@ -219,7 +226,7 @@ def simulate_issue(research_id, issue_id, engine):
         if issue.get("relevant") is False:
             raise SimulationError("Temuan ini bukan masalah operasional perusahaan, jadi tidak disimulasikan.")
         if issue.get("scenario", "none") == "none":
-            raise SimulationError("Temuan ini tidak bisa disimulasikan di data toko.")
+            raise SimulationError("Temuan ini tidak bisa disimulasikan.")
         company = rec["result"]["company"].get("name") or rec["company"]
         target = scenarios.DEFAULT_CATALOG
         if rec["result"].get("catalog"):
@@ -230,19 +237,33 @@ def simulate_issue(research_id, issue_id, engine):
         switched = scenarios.current_catalog(config.BUSINESS_DB_PATH).get("key") != target["key"]
         if switched:
             switch_catalog(target, engine)
-        prefer = resolve_target(issue.get("target"), target)
-        alerts, params = inject(issue["scenario"], f"simulasi kasus {company}", prefer)
-        for a in alerts:
-            a["title"] = f"{a['title']} (simulasi kasus {company})"
-            a["detail"]["simulation"] = {
-                "company": company, "case": issue["title"], "case_date": issue["date"],
-                "case_category": issue["category_label"], "pattern": issue["scenario_label"],
-                "catalog": target["company"],
-                "target_product": (issue.get("target") or {}).get("product", ""),
-                "public_sources": [s["domain"] or s["title"] for s in issue["sources"]][:3],
-                "note": "Data demo dengan katalog simulasi (harga dan angka perkiraan), bukan data internal perusahaan.",
-            }
+        problem = (issue.get("problem") or issue["title"]).strip().rstrip(".")
+        sim = {"company": company, "case": issue["title"], "case_date": issue["date"], "problem": problem,
+               "case_category": issue["category_label"], "pattern": issue["scenario_label"],
+               "catalog": target["company"], "target_product": (issue.get("target") or {}).get("product", ""),
+               "public_sources": [s["domain"] or s["title"] for s in issue["sources"]][:3],
+               "note": "Data demo dengan katalog simulasi (harga dan angka perkiraan), bukan data internal perusahaan."}
+        if issue["scenario"] == "case_report":
+            alerts = [{"id": f"case:{research_id}:{issue_id}", "type": "case_report",
+                       "title": f"{problem} (kasus {company})",
+                       "detail": {"simulation": {**sim, "detected": "Kasus dari sumber berita, tanpa pola data toko"},
+                                  "case": {"title": issue["title"], "date": issue["date"], "category": issue["category"],
+                                           "summary": issue["summary"], "impact": issue.get("impact", ""),
+                                           "mitigation": issue.get("mitigation", []),
+                                           "sources": [{"title": s["title"], "url": s["url"]} for s in issue["sources"]][:5]}}}]
+        else:
+            prefer = resolve_target(issue.get("target"), target)
+            extra = {"case_text": problem}
+            if issue["scenario"] == "complaint_spike":
+                extra["category"] = issue.get("complaint_category") or "layanan"
+            alerts, params = inject(issue["scenario"], f"simulasi kasus {company}", prefer, extra)
+            for n, a in enumerate(alerts):
+                detected = a["title"]
+                a["title"] = f"{problem} (kasus {company})" if n == 0 else f"{detected} (terkait kasus {company})"
+                a["detail"]["simulation"] = {**sim, "detected": detected}
         store.sync_alerts(alerts)
+        for a in alerts:  # monitor bisa lebih dulu mencatat anomali ini dengan judul detektor
+            store.update_alert_meta(a)
         alert_id = alerts[0]["id"]
         try:
             run_id = engine.enqueue(alert_id, trigger="simulasi")

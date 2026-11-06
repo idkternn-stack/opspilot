@@ -90,6 +90,34 @@ SCENARIOS = {
         "expect": {"keywords": [["pos", "sinkron", "sync"]],
                    "actions_any": ["create_ticket"], "forbidden": ["transfer_stock", "pause_promo"]},
     },
+    "tagihan_ganda_surabaya": {
+        "kind": "payment_error", "store": 3,
+        "title": "Transaksi kartu ditolak tetapi dana pelanggan tetap ditagih di Surabaya",
+        "expected_alert": "payment_anomaly",
+        "expect": {"keywords": [["ditolak", "declined"], ["ditagih", "tagihan", "terpotong", "dibebankan", "charged"]],
+                   "actions_any": ["refund_payments"], "forbidden": ["transfer_stock", "pause_promo"]},
+    },
+    "pembayaran_gagal_bandung": {
+        "kind": "payment_outage", "store": 2,
+        "title": "Pembayaran gagal massal di Bandung karena gangguan payment gateway",
+        "expected_alert": "payment_anomaly",
+        "expect": {"keywords": [["gagal", "failed", "timeout"], ["pembayaran", "payment", "gateway"]],
+                   "actions_any": ["create_ticket"], "forbidden": ["refund_payments", "transfer_stock", "pause_promo"]},
+    },
+    "keluhan_aplikasi_jakarta": {
+        "kind": "complaint_spike", "store": 1, "category": "aplikasi",
+        "title": "Keluhan aplikasi error di Jakarta melonjak",
+        "expected_alert": "complaint_spike",
+        "expect": {"keywords": [["keluhan", "komplain"], ["aplikasi", "app", "error"]],
+                   "actions_any": ["create_ticket"], "forbidden": ["transfer_stock", "pause_promo", "refund_payments"]},
+    },
+    "pesanan_terlambat_medan": {
+        "kind": "order_delay", "store": 4,
+        "title": "Pesanan pelanggan di Medan terlambat karena satu mitra kurir bermasalah",
+        "expected_alert": "order_delay",
+        "expect": {"keywords": [["terlambat", "delay"], ["kurir", "logistik", "pengiriman"]],
+                   "actions_any": ["create_ticket"], "forbidden": ["pause_promo", "refund_payments"]},
+    },
     "toko_tutup_surabaya": {
         "kind": "store_closure", "store": 3, "days": [1, 2],
         "title": "Pendapatan Surabaya turun karena toko tutup terjadwal untuk renovasi",
@@ -129,12 +157,24 @@ def normalize_catalog(raw, company=""):
             continue
         name, cat = clean(p.get("nama")), clean(p.get("kategori")) or "Umum"
         try:
-            price, cost, qty = float(p.get("harga")), float(p.get("harga_pokok")), float(p.get("qty_harian"))
+            price = float(p.get("harga"))
         except (TypeError, ValueError):
             continue
-        if not name or not (0 < cost < price <= 5e9):
+        try:
+            cost = float(p.get("harga_pokok"))
+        except (TypeError, ValueError):
+            cost = 0
+        try:
+            qty = float(p.get("qty_harian"))
+        except (TypeError, ValueError):
+            qty = 10
+        if not name or not (0 < price <= 5e9):
             continue
+        if not 0 < cost < price:  # harga pokok tidak wajar (mis. voucher): pakai perkiraan 80% harga
+            cost = price * 0.8
         products.append((i, name, cat, round(price), round(cost), int(min(max(qty, 3), 120))))
+    for i in range(len(stores) + 1, 5) if stores else ():  # gerai kurang: tambahkan gerai online
+        stores.append((i, f"Gerai online {i}", "Online"))
     if len(stores) < 4 or len(products) < 8:
         raise CatalogError("Katalog butuh tepat 4 toko dan 8 produk yang valid.")
     company = clean(company or raw.get("perusahaan")) or "Perusahaan"
@@ -167,6 +207,9 @@ CREATE TABLE pos_sync_log(store_id INT, date TEXT, status TEXT, note TEXT);
 CREATE TABLE store_events(store_id INT, start_date TEXT, end_date TEXT, event TEXT);
 CREATE TABLE stock_transfers(id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INT, from_store_id INT, to_store_id INT, qty INT, reason TEXT, created_at TEXT);
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE payments(id INTEGER PRIMARY KEY, date TEXT, store_id INT, method TEXT, amount REAL, status TEXT, charged INT, refunded INT, note TEXT);
+CREATE TABLE complaints(id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, store_id INT, channel TEXT, category TEXT, text TEXT);
+CREATE TABLE orders(id INTEGER PRIMARY KEY, order_date TEXT, store_id INT, product_id INT, qty INT, promised_date TEXT, delivered_date TEXT, status TEXT, courier TEXT);
 CREATE TABLE tickets(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, priority TEXT, description TEXT, created_at TEXT);
 CREATE TABLE notifications(id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT, message TEXT, created_at TEXT);
 """
@@ -249,7 +292,7 @@ def build(path, scenario_ids=None, rnd_seed=7, today=None, catalog=None):
                     sales[(d, s, p)][0] = 0
             events.append((s, day(max(sc["days"])), day(min(sc["days"])),
                            "Toko tutup sementara untuk renovasi (terjadwal, disetujui Regional Manager)"))
-        else:
+        elif kind not in EXTRA_KINDS:
             raise ValueError(f"Jenis skenario tidak dikenal: {kind}")
 
     if os.path.exists(path):
@@ -270,11 +313,109 @@ def build(path, scenario_ids=None, rnd_seed=7, today=None, catalog=None):
         con.executemany("INSERT INTO pos_sync_log VALUES (?,?,?,?)",
                         [(s, day(d), "FAILED" if (s, d) in pos_failed else "OK", pos_failed.get((s, d), ""))
                          for d in range(DAYS, 0, -1) for s, *_ in STORES])
+        _customer_data(con, STORES, PRODUCTS, random.Random(rnd_seed + 1), day)
+        for sid in scenario_ids:
+            sc = SCENARIOS[sid]
+            if sc["kind"] in EXTRA_KINDS:
+                apply_extra(con, sc["kind"], sc, "", today)
         con.execute("INSERT INTO meta VALUES ('catalog', ?)", (json.dumps(cat, ensure_ascii=False),))
         con.commit()
     finally:
         con.close()
     return path
+
+
+# ---------------------------------------------------------------- data pelanggan
+PAY_METHODS = ["Kartu kredit", "Kartu debit", "E-wallet", "Transfer bank", "Virtual account"]
+PAY_PER_DAY, ORDERS_PER_DAY = 10, 6
+COURIERS = ["Kurir internal", "JNE", "SiCepat", "J&T"]
+SIM_COURIER = "Mitra kurir (simulasi)"
+COMPLAINT_CATEGORIES = {"aplikasi": "aplikasi/website error", "pembayaran": "pembayaran", "pengiriman": "pengiriman pesanan",
+                        "produk": "kualitas produk", "layanan": "layanan pelanggan", "keamanan_data": "keamanan akun/data"}
+COMPLAINT_TEXTS = {
+    "aplikasi": ["Aplikasi tidak bisa dibuka", "Gagal login berkali-kali", "Halaman checkout error"],
+    "pembayaran": ["Pembayaran gagal tapi saldo terpotong", "Pembayaran tidak terkonfirmasi", "Tagihan ganda"],
+    "pengiriman": ["Pesanan belum sampai", "Status pengiriman tidak bergerak", "Paket terlambat"],
+    "produk": ["Produk rusak saat diterima", "Produk tidak sesuai deskripsi", "Produk kedaluwarsa"],
+    "layanan": ["CS lambat merespons", "Keluhan tidak ditindaklanjuti", "Petugas gerai kurang ramah"],
+    "keamanan_data": ["Akun diakses orang lain", "Menerima pesan penipuan atas nama toko", "Data pribadi bocor"],
+}
+CHANNELS = ["Aplikasi", "Call center", "Email", "Media sosial"]
+EXTRA_KINDS = ("payment_error", "payment_outage", "complaint_spike", "order_delay")
+
+
+def _customer_data(con, stores, products, rnd, day):
+    """Transaksi pembayaran, pesanan pelanggan, dan keluhan normal selama 30 hari (tanpa anomali)."""
+    pay, orders, comp = [], [], []
+    pid_n = oid_n = 0
+    for d in range(DAYS, 0, -1):
+        for s, *_ in stores:
+            for _ in range(PAY_PER_DAY):
+                pid_n += 1
+                prod = rnd.choice(products)
+                ok = rnd.random() > 0.03
+                pay.append((pid_n, day(d), s, rnd.choice(PAY_METHODS), prod[3] * rnd.randint(1, 3),
+                            "SUCCESS" if ok else "FAILED", 1 if ok else 0, 0, "" if ok else "Saldo/limit tidak cukup"))
+            for _ in range(ORDERS_PER_DAY):
+                oid_n += 1
+                prod = rnd.choice(products)
+                promised = d - 2
+                if promised <= 0:
+                    status, delivered = "DIPROSES", None
+                elif rnd.random() < 0.05:
+                    status, delivered = "TERLAMBAT", day(promised - 1) if promised > 1 else None
+                else:
+                    status, delivered = "DITERIMA", day(promised)
+                orders.append((oid_n, day(d), s, prod[0], rnd.randint(1, 3), day(promised), delivered, status,
+                               rnd.choice(COURIERS)))
+            for _ in range(rnd.choice([0, 0, 1, 1, 2])):
+                cat = rnd.choice(list(COMPLAINT_TEXTS))
+                comp.append((day(d), s, rnd.choice(CHANNELS), cat, rnd.choice(COMPLAINT_TEXTS[cat])))
+    con.executemany("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", pay)
+    con.executemany("INSERT INTO orders VALUES (?,?,?,?,?,?,?,?,?)", orders)
+    con.executemany("INSERT INTO complaints(date, store_id, channel, category, text) VALUES (?,?,?,?,?)", comp)
+
+
+def apply_extra(con, kind, p, note="", today=None, case_text=""):
+    """Pola masalah pelanggan: pembayaran, keluhan, dan pesanan terlambat (3 hari terakhir)."""
+    today = today or dt.date.today()
+    d = lambda n: (today - dt.timedelta(days=n)).isoformat()
+    s = p["store"]
+    if kind == "payment_error":
+        for n in (1, 2, 3):
+            con.execute("""UPDATE payments SET status = 'DECLINED', charged = 1, refunded = 0, method = 'Kartu kredit',
+                           note = 'Otorisasi ditolak bank, tetapi dana pelanggan tetap ditagih'
+                           WHERE id IN (SELECT id FROM payments WHERE store_id = ? AND date = ? AND status = 'SUCCESS'
+                           ORDER BY id LIMIT 5)""", (s, d(n)))
+    elif kind == "payment_outage":
+        for n in (1, 2, 3):
+            con.execute("""UPDATE payments SET status = 'FAILED', charged = 0, note = 'Timeout dari payment gateway'
+                           WHERE id IN (SELECT id FROM payments WHERE store_id = ? AND date = ? AND status = 'SUCCESS'
+                           ORDER BY id LIMIT 5)""", (s, d(n)))
+    elif kind == "complaint_spike":
+        cat = p.get("category") if p.get("category") in COMPLAINT_TEXTS else "layanan"
+        texts = ([f"{prefix}{case_text}" for prefix in ("", "Pelanggan melapor: ", "Keluhan berulang: ", "Mohon segera dibantu: ")]
+                 if case_text else COMPLAINT_TEXTS[cat])
+        rows = [(d(n), s, CHANNELS[i % len(CHANNELS)], cat, texts[i % len(texts)]) for n in (1, 2, 3) for i in range(8)]
+        con.executemany("INSERT INTO complaints(date, store_id, channel, category, text) VALUES (?,?,?,?,?)", rows)
+    elif kind == "order_delay":
+        con.execute("""UPDATE orders SET status = 'TERLAMBAT', delivered_date = NULL, courier = ?
+                       WHERE store_id = ? AND promised_date BETWEEN ? AND ? AND id % 4 != 0""", (SIM_COURIER, s, d(3), d(1)))
+    else:
+        raise ValueError(f"Jenis skenario tidak dikenal: {kind}")
+
+
+def outdated(path):
+    """True bila database toko dibuat versi lama (belum punya tabel pembayaran, pesanan, keluhan)."""
+    try:
+        con = sqlite3.connect(path)
+        try:
+            names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return True
+    return not {"payments", "orders", "complaints"} <= names
 
 
 def current_catalog(path):

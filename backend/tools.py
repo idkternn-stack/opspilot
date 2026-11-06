@@ -1,7 +1,7 @@
 """Tool yang bisa dipanggil agent.
 
 Tool baca (langsung dijalankan): run_sql_readonly, search_sop, estimate_loss.
-Tool aksi (wajib disetujui manusia): create_ticket, send_notification, transfer_stock, pause_promo.
+Tool aksi (wajib disetujui manusia): create_ticket, send_notification, transfer_stock, pause_promo, refund_payments.
 Tool aksi divalidasi dua kali: saat diusulkan agent dan saat disetujui manusia.
 """
 import datetime as dt
@@ -177,6 +177,29 @@ def validate_action(tool, args):
             raise ActionError(f"Tidak ada promo aktif untuk {products[pid]} di {stores[sid]}.")
         clean = {"store_id": sid, "product_id": pid, "reason": str(args.get("reason", "")).strip()}
         return clean, f"Hentikan promo {round(promo['discount'] * 100)}% untuk {products[pid]} di {stores[sid]}"
+    if tool == "refund_payments":
+        sid = _int(args.get("store_id"), "store_id")
+        raw_ids = args.get("payment_ids") or []
+        if not isinstance(raw_ids, list):
+            raise ActionError("payment_ids harus berupa daftar ID transaksi.")
+        ids = sorted({_int(i, "payment_ids") for i in raw_ids})[:500]
+        con = db.business_ro()
+        try:
+            stores, _ = _names(con, (sid,))
+            eligible = {r["id"]: r["amount"] for r in con.execute(
+                "SELECT id, amount FROM payments WHERE store_id = ? AND status = 'DECLINED' AND charged = 1 AND refunded = 0", (sid,))}
+        finally:
+            con.close()
+        if not eligible:
+            raise ActionError(f"Tidak ada transaksi ditolak-tapi-ditagih yang belum direfund di {stores[sid]}.")
+        bad = [i for i in ids if i not in eligible]
+        if bad:
+            raise ActionError(f"Transaksi {bad[:10]} tidak bisa direfund (bukan transaksi ditolak yang tertagih di {stores[sid]}, "
+                              "atau sudah direfund).")
+        ids = ids or sorted(eligible)
+        total = sum(eligible[i] for i in ids)
+        clean = {"store_id": sid, "payment_ids": ids, "reason": str(args.get("reason", "")).strip()}
+        return clean, f"Refund {len(ids)} transaksi ditolak-tapi-ditagih di {stores[sid]} (total Rp{int(round(total)):,})".replace(",", ".")
     raise ActionError(f"Tool aksi tidak dikenal: {tool}")
 
 
@@ -213,10 +236,18 @@ def execute_action(tool, args):
             left = con.execute("SELECT COUNT(*) FROM promotions WHERE store_id = ? AND product_id = ? AND active = 1",
                                (args["store_id"], args["product_id"])).fetchone()[0]
             return {"promo_active": bool(left), "verification": "Promo sudah nonaktif." if not left else "Promo masih aktif!"}
+        if tool == "refund_payments":
+            ids = args["payment_ids"]
+            marks = ",".join("?" * len(ids))
+            con.execute(f"UPDATE payments SET refunded = 1, note = note || ' | refund diproses ' || ? WHERE id IN ({marks})",
+                        (_now(), *ids))
+            con.commit()
+            left = con.execute(f"SELECT COUNT(*) FROM payments WHERE refunded = 0 AND id IN ({marks})", ids).fetchone()[0]
+            return {"refunded": len(ids) - left, "verification": f"{len(ids) - left} dari {len(ids)} transaksi sudah ditandai refund."}
     finally:
         con.close()
     raise ActionError(f"Tool aksi tidak dikenal: {tool}")
 
 
 READ_TOOLS = {"run_sql_readonly": run_sql_readonly, "search_sop": search_sop, "estimate_loss": estimate_loss}
-ACTION_TOOLS = ("create_ticket", "send_notification", "transfer_stock", "pause_promo")
+ACTION_TOOLS = ("create_ticket", "send_notification", "transfer_stock", "pause_promo", "refund_payments")

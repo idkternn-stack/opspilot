@@ -17,7 +17,7 @@ from . import config, evidence, llm, rules, tools
 
 AgentBusyError = llm.LLMUnavailable  # nama lama, dipakai modul lain
 
-SYSTEM = """Kamu adalah OpsPilot, agent investigasi anomali operasional untuk jaringan toko retail.
+SYSTEM = """Kamu adalah OpsPilot, agent investigasi anomali operasional untuk jaringan toko retail dan e-commerce.
 Kamu menerima anomali dan bukti yang sudah dikumpulkan tool (setiap bukti punya ID seperti E3).
 Tugasmu menalar akar masalah dan memutuskan tindakan sesuai SOP.
 
@@ -32,21 +32,36 @@ Aturan:
   (sebut produk, gerai, jumlah, dan pihak terkait; bukan langkah generik), PIC, target waktu, dan hasil terukur.
 - Penjualan turun tanpa keterlambatan pengiriman dan stok masih menumpuk berarti permintaan turun: usulkan
   menunda/mengurangi pesanan ke Procurement dan/atau transfer stok ke toko yang penjualannya masih normal.
-- Bila anomali punya detail.simulation, itu simulasi di data demo yang meniru pola kasus publik suatu
-  perusahaan. Sebut konteksnya satu kalimat di akar_masalah; bukti tetap dari data.
+- Pembayaran: transaksi DECLINED dengan charged=1 dan refunded=0 berarti pelanggan ditagih padahal transaksinya
+  ditolak. Usulkan refund_payments untuk ID transaksi itu, tiket HIGH ke Finance/Payment untuk rekonsiliasi dengan
+  bank/payment gateway, dan notifikasi ke pelanggan terdampak. Transaksi FAILED dengan charged=0 tidak memotong dana
+  pelanggan, jadi JANGAN refund; tangani gangguan payment gateway lewat tiket.
+- Keluhan pelanggan dan pesanan terlambat: cari pola (kategori, kurir, gerai), lalu tiket ke tim pemilik masalah
+  (IT/Product untuk aplikasi, Logistik untuk kurir, Quality Control untuk produk, IT Security untuk keamanan data,
+  Customer Service untuk layanan) dan notifikasi ke pelanggan atau Customer Service.
+- Bila anomali punya detail.simulation, judul anomali adalah masalah ASLI perusahaan itu yang disimulasikan di toko
+  demo. Akar masalah harus menjelaskan masalah itu (sebut kasus aslinya satu kalimat), bukti dari data demo, dan
+  tindakan harus menyelesaikan masalah itu, bukan masalah lain.
+- Tipe case_report tidak punya data toko: buktinya sumber berita publik dan SOP. Jelaskan akar masalah dari sumber,
+  lalu usulkan tiket dan notifikasi ke tim yang tepat (Legal, Finance, IT Security, Customer Service, Operasional,
+  Komunikasi Korporat) dengan langkah penyelesaian yang konkret.
 - Tulis dalam Bahasa Indonesia. Balas HANYA JSON valid."""
 
 SCHEMA = """stores(id, name, city); products(id, name, category, price, cost, base_qty);
 sales(date, store_id, product_id, qty, discount); inventory(store_id, product_id, stock, reorder_point);
 deliveries(store_id, product_id, supplier, expected_date, received_date, status);
 promotions(store_id, product_id, discount, active, start_date); pos_sync_log(store_id, date, status, note);
-store_events(store_id, start_date, end_date, event)"""
+store_events(store_id, start_date, end_date, event);
+payments(id, date, store_id, method, amount, status SUCCESS|FAILED|DECLINED, charged 0|1, refunded 0|1, note);
+complaints(id, date, store_id, channel, category, text);
+orders(id, order_date, store_id, product_id, qty, promised_date, delivered_date, status DITERIMA|TERLAMBAT|DIPROSES, courier)"""
 
 ACTIONS_DOC = """Tindakan yang tersedia (semua menunggu persetujuan manusia):
 - create_ticket {"title": str, "priority": "HIGH"|"MEDIUM"|"LOW", "description": str}
 - send_notification {"to": str, "message": str}
 - transfer_stock {"product_id": int, "from_store_id": int, "to_store_id": int, "qty": int, "reason": str}
-- pause_promo {"store_id": int, "product_id": int, "reason": str}"""
+- pause_promo {"store_id": int, "product_id": int, "reason": str}
+- refund_payments {"store_id": int, "payment_ids": [int], "reason": str}  (hanya transaksi DECLINED yang charged=1)"""
 
 RESPONSE_DOC = """Bentuk JSON jawaban:
 {"rencana": ["langkah penalaran singkat", "..."],
@@ -209,6 +224,12 @@ DEFAULT_DETAIL = {
                                   "Laporkan hasil beserta bukti, lalu tutup tiket"],
                       "pic": "Tim terkait sesuai tiket", "target_waktu": "",
                       "hasil": "Penyebab masalah ditangani dan tiket ditutup dengan bukti"},
+    "refund_payments": {"langkah": ["Finance mencocokkan status setiap transaksi dengan laporan bank/payment gateway",
+                                     "Proses pengembalian dana ke metode bayar asal pelanggan",
+                                     "Kirim konfirmasi refund beserta nomor referensi ke setiap pelanggan",
+                                     "Tandai transaksi sebagai sudah direfund dan arsipkan bukti"],
+                        "pic": "Finance & Payment Operations", "target_waktu": "24 jam",
+                        "hasil": "Semua pelanggan yang ditagih untuk transaksi yang ditolak sudah menerima dananya kembali"},
     "send_notification": {"langkah": ["Penerima membaca dan mengonfirmasi notifikasi", "Penerima menjalankan instruksi di pesan"],
                           "pic": "", "target_waktu": "Hari ini",
                           "hasil": "Pihak terkait mengetahui masalah dan langkah yang harus diambil"},

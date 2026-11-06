@@ -96,6 +96,74 @@ def detect_alerts(today=None, path=None):
                 alerts.append({"id": f"gap:{st['id']}", "type": "data_gap",
                                "title": f"Data penjualan {st['name']} hilang {len(missing)} hari",
                                "detail": {"store": st["name"], "store_id": st["id"], "missing_dates": missing}})
+        alerts += _customer_alerts(con, today, recent_start, base_end)
     finally:
         con.close()
+    return alerts
+
+
+def _rp(x):
+    return f"Rp{int(round(x or 0)):,}".replace(",", ".")
+
+
+def _customer_alerts(con, today, recent_start, base_end):
+    """6. masalah pembayaran, 7. lonjakan keluhan pelanggan, 8. pesanan pelanggan terlambat."""
+    alerts, today_s = [], today.isoformat()
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"payments", "complaints", "orders"} <= tables:
+        return alerts
+    first = con.execute("SELECT MIN(date) FROM sales").fetchone()[0] or base_end
+    base_days = max(1, (dt.date.fromisoformat(base_end) - dt.date.fromisoformat(first)).days + 1)
+
+    for r in con.execute("""
+            SELECT st.id, st.name,
+                   SUM(CASE WHEN p.date >= ? AND p.status = 'DECLINED' AND p.charged = 1 AND p.refunded = 0 THEN 1 ELSE 0 END) AS dc,
+                   SUM(CASE WHEN p.date >= ? AND p.status = 'DECLINED' AND p.charged = 1 AND p.refunded = 0 THEN p.amount ELSE 0 END) AS dc_amount,
+                   SUM(CASE WHEN p.date >= ? THEN 1 ELSE 0 END) AS rt,
+                   SUM(CASE WHEN p.date >= ? AND p.status = 'FAILED' THEN 1 ELSE 0 END) AS rf,
+                   SUM(CASE WHEN p.date <= ? THEN 1 ELSE 0 END) AS bt,
+                   SUM(CASE WHEN p.date <= ? AND p.status = 'FAILED' THEN 1 ELSE 0 END) AS bf
+            FROM payments p JOIN stores st ON st.id = p.store_id GROUP BY st.id ORDER BY st.id""",
+                         (recent_start, recent_start, recent_start, recent_start, base_end, base_end)).fetchall():
+        rate = lambda f, t: round(100 * f / t, 1) if t else 0.0
+        fail_now, fail_base = rate(r["rf"], r["rt"]), rate(r["bf"], r["bt"])
+        base = {"store": r["name"], "store_id": r["id"], "recent_failed_pct": fail_now, "baseline_failed_pct": fail_base,
+                "recent_transactions": r["rt"]}
+        if (r["dc"] or 0) >= 3:
+            alerts.append({"id": f"pay:{r['id']}", "type": "payment_anomaly",
+                           "title": f"{r['dc']} transaksi ditolak tetapi tetap ditagih di {r['name']} ({_rp(r['dc_amount'])})",
+                           "detail": {**base, "issue": "declined_but_charged", "declined_charged": r["dc"],
+                                      "declined_charged_amount": round(r["dc_amount"])}})
+        elif fail_now >= 25 and fail_now > 3 * max(fail_base, 1):
+            alerts.append({"id": f"pay:{r['id']}", "type": "payment_anomaly",
+                           "title": f"Pembayaran gagal {fail_now}% di {r['name']} (normal {fail_base}%)",
+                           "detail": {**base, "issue": "payment_failures", "recent_failed": r["rf"]}})
+
+    for r in con.execute("""
+            SELECT st.id, st.name, c.category,
+                   SUM(CASE WHEN c.date >= ? THEN 1 ELSE 0 END) AS rc, SUM(CASE WHEN c.date <= ? THEN 1 ELSE 0 END) AS bc
+            FROM complaints c JOIN stores st ON st.id = c.store_id GROUP BY st.id, c.category ORDER BY st.id, c.category""",
+                         (recent_start, base_end)).fetchall():
+        now, before = round(r["rc"] / RECENT_DAYS, 1), round(r["bc"] / base_days, 1)
+        if now >= 4 and now > 3 * max(before, 0.3):
+            alerts.append({"id": f"cmp:{r['id']}:{r['category']}", "type": "complaint_spike",
+                           "title": f"Keluhan {r['category'].replace('_', ' ')} di {r['name']} melonjak ({now}/hari, normal {before}/hari)",
+                           "detail": {"store": r["name"], "store_id": r["id"], "category": r["category"],
+                                      "recent_per_day": now, "baseline_per_day": before, "recent_total": r["rc"]}})
+
+    for r in con.execute("""
+            SELECT st.id, st.name,
+                   SUM(CASE WHEN o.promised_date >= ? AND o.promised_date < ? THEN 1 ELSE 0 END) AS rt,
+                   SUM(CASE WHEN o.promised_date >= ? AND o.promised_date < ? AND o.status = 'TERLAMBAT' THEN 1 ELSE 0 END) AS rl,
+                   SUM(CASE WHEN o.promised_date <= ? THEN 1 ELSE 0 END) AS bt,
+                   SUM(CASE WHEN o.promised_date <= ? AND o.status = 'TERLAMBAT' THEN 1 ELSE 0 END) AS bl
+            FROM orders o JOIN stores st ON st.id = o.store_id GROUP BY st.id ORDER BY st.id""",
+                         (recent_start, today_s, recent_start, today_s, base_end, base_end)).fetchall():
+        now = round(100 * r["rl"] / r["rt"], 1) if r["rt"] else 0.0
+        before = round(100 * r["bl"] / r["bt"], 1) if r["bt"] else 0.0
+        if now >= 40 and now > 3 * max(before, 1):
+            alerts.append({"id": f"ord:{r['id']}", "type": "order_delay",
+                           "title": f"{r['rl']} dari {r['rt']} pesanan pelanggan {r['name']} terlambat ({now}%, normal {before}%)",
+                           "detail": {"store": r["name"], "store_id": r["id"], "late_orders": r["rl"], "orders_due": r["rt"],
+                                      "recent_late_pct": now, "baseline_late_pct": before}})
     return alerts

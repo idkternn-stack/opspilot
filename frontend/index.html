@@ -104,7 +104,7 @@ const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const js = o => esc(JSON.stringify(o, null, 1));
 const time = iso => iso ? new Date(iso).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'}) : '-';
 const OFFLINE = 'Server OpsPilot tidak terhubung. Jalankan start.bat, lalu buka http://127.0.0.1:7860.';
-const TYPE = {revenue_drop:'Pendapatan turun', sales_drop:'Penjualan anjlok', discount_anomaly:'Diskon tidak wajar', demand_spike:'Lonjakan permintaan', data_gap:'Data hilang'};
+const TYPE = {revenue_drop:'Pendapatan turun', sales_drop:'Penjualan anjlok', discount_anomaly:'Diskon tidak wajar', demand_spike:'Lonjakan permintaan', data_gap:'Data hilang', payment_anomaly:'Masalah pembayaran', complaint_spike:'Lonjakan keluhan', order_delay:'Pesanan terlambat', case_report:'Kasus dari berita'};
 const STATUS = {open:['Baru',''], queued:['Antre','busy'], investigating:['Diinvestigasi','busy'], awaiting_approval:['Menunggu persetujuan','warn'], resolved:['Selesai ditangani','ok'], closed:['Ditutup tanpa aksi','ok'], error:['Gagal','warn']};
 const RUNSTATUS = {queued:['Antre','busy'], running:['Berjalan','busy'], done:['Selesai','ok'], error:['Gagal','warn']};
 const pill = ([t, c]) => `<span class="pill ${c}">${esc(t)}</span>`;
@@ -158,7 +158,8 @@ function renderAlerts(list) {
     const card = document.createElement('div');
     card.className = 'card alert' + (S.view === 'run' && S.run && S.run.alert_id === a.id ? ' sel' : '');
     card.tabIndex = 0;
-    card.innerHTML = `<b>${esc(a.title)}</b>
+    const sim = a.detail && a.detail.simulation;
+    card.innerHTML = `<b>${esc(a.title)}</b>${sim && sim.detected ? `<div class="small" style="margin-top:4px">Di data toko demo: ${esc(sim.detected)}</div>` : ''}
       <div class="row" style="margin-top:6px"><span class="small">${esc(TYPE[a.type] || a.type)}</span>${pill(STATUS[a.status] || [a.status, ''])}</div>
       <div class="row left" style="margin-top:8px"></div>`;
     const actions = card.querySelector('.row.left');
@@ -267,7 +268,9 @@ function renderRun() {
     <div class="small" style="margin-top:4px">Pemicu: ${esc(TRIGGER[r.trigger] || r.trigger)} · ${time(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}${r.duration_s ? ` · ${r.duration_s} detik · ${r.steps} panggilan AI · ${r.tool_calls} panggilan tool` : ''}</div></div>`;
   if ((r.model || '').startsWith('aturan')) h += '<div class="banner replay">Mode tanpa AI: semua model AI sedang tidak bisa dipakai (kuota habis atau sibuk), jadi diagnosis memakai aturan berbasis bukti. Jalankan ulang investigasi saat kuota tersedia untuk penalaran AI.</div>';
   const sim = r.alert && r.alert.detail && r.alert.detail.simulation;
-  if (sim) h += `<div class="banner replay">Simulasi pola kasus ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Pola yang ditiru: ${esc(sim.pattern)}${sim.target_product ? ` pada produk ${esc(sim.target_product)}` : ''}. Toko demo memakai katalog simulasi ${esc(sim.catalog || sim.company)} dengan harga dan angka perkiraan, bukan data internal perusahaan.</div>`;
+  if (sim) h += r.alert.type === 'case_report'
+    ? `<div class="banner replay">Kasus nyata ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Masalah ini tidak tampak di data toko, jadi agent menalar langsung dari sumber berita dan SOP, lalu mengusulkan penyelesaiannya.</div>`
+    : `<div class="banner replay">Kasus nyata ${esc(sim.company)}: ${esc(sim.case)} (${esc(sim.case_date)}). Masalah yang sama disimulasikan di toko demo ${esc(sim.catalog || sim.company)}${sim.detected ? `: ${esc(sim.detected)}` : ''}. Harga dan angka perkiraan, bukan data internal perusahaan.</div>`;
   if (r.mode === 'replay') h += '<div class="banner replay">Ini rekaman investigasi sebelumnya, bukan investigasi langsung. Usulan tindakan tetap divalidasi terhadap data saat ini.</div>';
   if (r.status === 'error') {
     h += `<div class="banner err">${esc(r.error)}</div><div class="row left"><button onclick="start('/api/investigate','${esc(r.alert_id)}')">Coba lagi</button>${r.has_recording ? `<button class="ghost" onclick="start('/api/replay','${esc(r.alert_id)}')">Putar rekaman</button>` : ''}</div>`;
@@ -333,9 +336,9 @@ function issueHtml(rid, i) {
   if (i.simulated) {
     h += `<div class="row left" style="margin-top:10px"><button class="ghost" onclick="selectRun('${esc(i.simulated.run_id)}', true)">Lihat investigasi simulasi</button><span class="small">${esc(i.simulated.alert_title)}</span></div>`;
   } else if (i.scenario && i.scenario !== 'none') {
-    h += `<div class="row left" style="margin-top:10px"><button onclick="simulateIssue('${esc(rid)}', ${i.id}, this)">Simulasikan di OpsPilot</button><span class="small">Pola: ${esc(i.scenario_label)}${i.target && i.target.product ? ` · produk: ${esc(i.target.product)}` : ''}${i.target && i.target.store ? ` · gerai: ${esc(i.target.store)}` : ''}${i.scenario_reason ? '. ' + esc(i.scenario_reason) : ''}</span></div>`;
+    h += `<div class="row left" style="margin-top:10px"><button onclick="simulateIssue('${esc(rid)}', ${i.id}, this)">Simulasikan di OpsPilot</button><span class="small">${i.problem ? `Anomali: <b>${esc(i.problem)}</b> · ` : ''}Pola: ${esc(i.scenario_label)}${i.target && i.target.product ? ` · produk: ${esc(i.target.product)}` : ''}${i.target && i.target.store ? ` · gerai: ${esc(i.target.store)}` : ''}${i.scenario_reason ? '. ' + esc(i.scenario_reason) : ''}</span></div>`;
   } else {
-    h += `<div class="small" style="margin-top:8px">Tidak bisa disimulasikan di data toko${i.scenario_reason ? ': ' + esc(i.scenario_reason) : '.'}</div>`;
+    h += `<div class="small" style="margin-top:8px">Tidak disimulasikan${i.scenario_reason ? ': ' + esc(i.scenario_reason) : '.'}</div>`;
   }
   return h + '</div>';
 }

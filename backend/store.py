@@ -44,6 +44,11 @@ def sync_alerts(alerts):
     return new
 
 
+def update_alert_meta(alert):
+    _write("UPDATE alerts SET title = ?, detail = ? WHERE id = ?",
+           (alert["title"], json.dumps(alert["detail"], ensure_ascii=False), alert["id"]))
+
+
 def _alert(row):
     row = dict(row)
     row["detail"] = json.loads(row["detail"] or "{}")
