@@ -179,6 +179,12 @@ tests/          tes offline dengan Gemini tiruan
 
 Repo ini sudah berisi `render.yaml` (Render) dan `Dockerfile` (Hugging Face Spaces, Railway, atau hosting Docker lain).
 
+**Hugging Face Spaces (gratis, tanpa kartu kredit):**
+1. Di [huggingface.co](https://huggingface.co), klik **Spaces** → **New Space**. Isi nama `opspilot`, pilih SDK **Docker** → template **Blank**, hardware **CPU basic (free)**, visibility **Public**, lalu **Create Space**.
+2. Di tab **Files**, klik **Add file** → **Create a new file**, beri nama `Dockerfile`, tempel isi [`deploy/huggingface/Dockerfile`](deploy/huggingface/Dockerfile), lalu **Commit**.
+3. Di **Settings** → **Variables and secrets**, tambahkan secret `GEMINI_API_KEY` (dan `GROQ_API_KEY` bila ada).
+4. Setelah build selesai, link publiknya `https://<username>-opspilot.hf.space`. Untuk memakai commit terbaru dari GitHub: **Settings** → **Restart this Space** (atau **Factory rebuild**).
+
 **Render (gratis, otomatis update setiap push ke `main`):**
 1. Daftar di [render.com](https://render.com) dengan akun GitHub.
 2. **New +** → **Blueprint** → pilih repo `opspilot`. Render membaca `render.yaml`.
