@@ -7,3 +7,6 @@ eval/tmp/
 .venv/
 *.zip
 cloudflared.exe
+data/recordings/*.json
+config.yaml
+config.yml

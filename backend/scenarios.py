@@ -420,6 +420,8 @@ def outdated(path):
 
 def current_catalog(path):
     """Katalog yang sedang dipakai database bisnis (default bila belum ada meta)."""
+    if not os.path.exists(path):  # jangan membuat file database kosong
+        return DEFAULT_CATALOG
     try:
         con = sqlite3.connect(path)
         try:

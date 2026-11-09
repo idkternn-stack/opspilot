@@ -171,7 +171,7 @@ backend/
   evaluate.py   evaluasi otomatis
 frontend/index.html
 data/sop/       dokumen SOP untuk RAG
-data/recordings/ rekaman investigasi untuk mode cadangan
+data/recordings/ rekaman investigasi lokal (tidak di-push ke GitHub)
 tests/          tes offline dengan Gemini tiruan
 ```
 

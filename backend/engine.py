@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 
-from . import agent, config, detect, llm, research, simulate, store, tools
+from . import agent, config, detect, llm, research, scenarios, simulate, store, tools
 
 
 def log(msg):
@@ -47,12 +47,22 @@ class Engine:
             return
         self._started = True
         threading.Thread(target=self._worker, name="opspilot-worker", daemon=True).start()
-        threading.Thread(target=self._monitor, name="opspilot-monitor", daemon=True).start()
+        if self.autopilot:  # monitor data toko sintetis hanya saat autopilot aktif
+            self._start_monitor()
         threading.Thread(target=self._research_worker, name="opspilot-research", daemon=True).start()
         threading.Thread(target=self._watcher, name="opspilot-watch", daemon=True).start()
 
+    def _start_monitor(self):
+        if not getattr(self, "_monitor_started", False):
+            self._monitor_started = True
+            if not os.path.exists(config.BUSINESS_DB_PATH):
+                scenarios.build(config.BUSINESS_DB_PATH)
+            threading.Thread(target=self._monitor, name="opspilot-monitor", daemon=True).start()
+
     def set_autopilot(self, enabled):
         self.autopilot = bool(enabled)
+        if self.autopilot and self._started:
+            self._start_monitor()
         log(f"autopilot {'aktif' if self.autopilot else 'nonaktif'}")
         if self.autopilot:
             self._wake.set()

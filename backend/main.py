@@ -19,7 +19,11 @@ engine = Engine()
 @asynccontextmanager
 async def lifespan(app):
     db.init_app_db()
-    if not os.path.exists(config.BUSINESS_DB_PATH):
+    # Data toko sintetis hanya dibuat bila autopilot diaktifkan (OPSPILOT_AUTOPILOT=1).
+    # Alur utama (riset perusahaan nyata -> analisis kasus) tidak memakainya.
+    if not config.AUTOPILOT:
+        pass
+    elif not os.path.exists(config.BUSINESS_DB_PATH):
         scenarios.build(config.BUSINESS_DB_PATH)
     elif scenarios.outdated(config.BUSINESS_DB_PATH):  # database versi lama: bangun ulang dengan tabel baru
         cat = scenarios.current_catalog(config.BUSINESS_DB_PATH)
@@ -62,7 +66,6 @@ class SimulateIn(BaseModel):
 @app.get("/api/state")
 def state():
     return {"model": config.MODEL, "fallback_model": config.FALLBACK_MODEL, "llm": llm.status(), "autopilot": engine.status(),
-            "catalog": {k: v for k, v in scenarios.current_catalog(config.BUSINESS_DB_PATH).items() if k in ("company", "key")},
             "alerts": store.list_alerts(), "runs": store.list_runs(15), "research": store.list_research(10),
             "summary": store.summary(), "watchlist": store.list_watch(),
             "watch_interval_hours": config.WATCH_INTERVAL_HOURS}
@@ -157,9 +160,11 @@ def reset():
     if store.any_running_run():
         raise HTTPException(409, "Tunggu sampai investigasi yang berjalan selesai sebelum reset.")
     engine.clear_queue()
+    store.reset()
+    if not config.AUTOPILOT:
+        return {"new_alerts": []}
     cat = scenarios.current_catalog(config.BUSINESS_DB_PATH)
     scenarios.build(config.BUSINESS_DB_PATH, catalog=None if cat.get("key") == "default" else cat)
-    store.reset()
     return {"new_alerts": engine.check_now()}
 
 
