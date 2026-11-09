@@ -5,6 +5,6 @@ if not exist .env (
   pause
   exit /b
 )
-echo Menjalankan evaluasi 8 skenario. Ini memanggil Gemini berkali-kali, butuh beberapa menit.
+echo Menjalankan evaluasi 13 skenario. Ini memanggil AI berkali-kali, butuh beberapa menit.
 python -m backend.evaluate %*
 pause
