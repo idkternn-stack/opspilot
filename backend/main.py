@@ -19,6 +19,9 @@ engine = Engine()
 @asynccontextmanager
 async def lifespan(app):
     db.init_app_db()
+    if not os.path.isdir(config.SOP_DIR) or not any(f.endswith(".md") for f in os.listdir(config.SOP_DIR)):
+        print("[OpsPilot] PERINGATAN: folder data/sop kosong atau hilang, agent tidak bisa merujuk SOP. "
+              "Kembalikan dengan perintah: git checkout origin/main -- data", flush=True)
     # Data toko sintetis hanya dibuat bila autopilot diaktifkan (OPSPILOT_AUTOPILOT=1).
     # Alur utama (riset perusahaan nyata -> analisis kasus) tidak memakainya.
     if not config.AUTOPILOT:

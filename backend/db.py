@@ -5,6 +5,7 @@
   Dipisah supaya agent tidak bisa membaca atau mengubah jejak audit.
 """
 import pathlib
+import os
 import sqlite3
 import threading
 
@@ -30,6 +31,7 @@ def business_rw(path=None):
 
 
 def app():
+    os.makedirs(os.path.dirname(config.APP_DB_PATH) or ".", exist_ok=True)  # folder data bisa saja terhapus
     con = sqlite3.connect(config.APP_DB_PATH, timeout=10)
     con.row_factory = sqlite3.Row
     return con

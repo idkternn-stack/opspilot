@@ -78,6 +78,8 @@ def run_sql_readonly(query: str):
 
 def _sop_chunks():
     chunks = []
+    if not os.path.isdir(config.SOP_DIR):
+        return []
     for name in sorted(f for f in os.listdir(config.SOP_DIR) if f.endswith(".md")):
         with open(os.path.join(config.SOP_DIR, name), encoding="utf-8") as fh:
             chunks.append((name, fh.read()))
@@ -87,6 +89,8 @@ def _sop_chunks():
 def search_sop(query: str, k: int = 2):
     """RAG: retrieval TF-IDF atas dokumen SOP di data/sop."""
     chunks = _sop_chunks()
+    if not chunks:
+        return [{"note": "Dokumen SOP tidak ditemukan (folder data/sop kosong)."}]
     docs = [text for _, text in chunks]
     vec = TfidfVectorizer().fit(docs + [query])
     scores = cosine_similarity(vec.transform([query]), vec.transform(docs))[0]
