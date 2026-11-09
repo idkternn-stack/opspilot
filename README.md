@@ -196,3 +196,7 @@ Repo ini sudah berisi `render.yaml` (Render) dan `Dockerfile` (Hugging Face Spac
 Bila tidak memakai Blueprint: **New +** → **Web Service** → pilih repo, Runtime Python, Build command `pip install -r requirements.txt`, Start command `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`, Instance type Free, lalu isi API key di **Environment**.
 
 Catatan paket gratis: server tidur setelah 15 menit tanpa pengunjung (buka pertama butuh sekitar 1 menit), dan riwayat riset/investigasi kembali kosong setiap server restart atau deploy ulang. Siapa pun yang punya link bisa memakai kuota API key, tetapi pembatas permintaan per menit tetap berlaku. API key hanya diisi di dashboard hosting, tidak pernah di kode.
+
+## Lisensi
+
+MIT License. Lihat file [LICENSE](LICENSE).
